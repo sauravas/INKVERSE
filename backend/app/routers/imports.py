@@ -193,6 +193,20 @@ async def reparse(source_id: str):
         name = (draft["name"] or "").strip()[:120] or "Module"
         same = db.one("SELECT id FROM modules WHERE subject_id=? AND "
                       "lower(name)=lower(?)", (sid, name))
+        if not same:
+            # The module an older parser mis-named after its own first question
+            # is this same module. Rename it rather than leaving a duplicate
+            # beside the new one - its indexed passages hang off it, and two
+            # modules for one heading is exactly what looked wrong.
+            for cand in db.rows("SELECT m.id, m.name FROM modules m WHERE "
+                                "m.subject_id=? AND NOT EXISTS (SELECT 1 FROM "
+                                "questions q WHERE q.module_id=m.id)", (sid,)):
+                if any(q.get("text", "")[:40].lower() in cand["name"].lower()
+                       for q in draft["questions"] if len(q.get("text", "")) > 20):
+                    db.run("UPDATE modules SET name=? WHERE id=?",
+                           (name, cand["id"]))
+                    same = cand
+                    break
         if same:
             mid = same["id"]
         else:
