@@ -185,9 +185,21 @@ html, body, #root {
   .no-print { display: none !important; }
 }
 
-/* --- agent observability rails ------------------------------------------- */
+/* --- agent observability rails -------------------------------------------
+   These loop forever, and they loop on a large SVG: animating a dash offset
+   invalidates the whole of it on every frame, so the browser repaints the
+   panel sixty times a second for as long as anything is running. On a laptop
+   whose GPU is also running the model, that is enough to tear the picture -
+   which is why the screen was steady with the window small (the rails are
+   hidden) and unusable with it maximised (they are not).
+
+   So they are off unless the student turns Motion on, and the live state is
+   shown by colour instead, which costs one repaint rather than sixty a
+   second. */
 .edge-live {
   stroke-dasharray: 5 4;
+}
+html.motion .edge-live {
   animation: edge-flow 0.6s linear infinite;
 }
 .edge-fading {
@@ -197,10 +209,11 @@ html, body, #root {
 }
 @keyframes edge-flow { to { stroke-dashoffset: -9; } }
 
-.node-live { animation: node-pulse 1.2s ease-in-out infinite; }
+.node-live { stroke-opacity: 0.55; }
+html.motion .node-live { animation: node-pulse 1.2s ease-in-out infinite; }
 @keyframes node-pulse { 50% { stroke-opacity: 0.35; } }
 
-.agent-dot-live { animation: dot-pulse 1s ease-in-out infinite; }
+html.motion .agent-dot-live { animation: dot-pulse 1s ease-in-out infinite; }
 @keyframes dot-pulse { 50% { opacity: 0.3; } }
 
 @media (prefers-reduced-motion: reduce) {
@@ -213,17 +226,13 @@ html, body, #root {
    instead of compositing it - and the fix is `start.ps1 -Open`, which
    launches Chrome with --disable-direct-composition. */
 
-/* Turned on from the top bar. The rails' looping SVG animations are the only
-   thing on the page that repaints continuously; on integrated graphics that
-   competes with the model for the same chip, so there has to be a way to stop
-   them without giving up the rails themselves. */
+/* Calm, which is the default, stops everything that loops. It deliberately
+   leaves the handwriting and the diagrams alone: those animations run once
+   and stop (`forwards`), so they cost one pass of painting rather than one
+   every frame for as long as the panel is open - and they are the thing the
+   student is actually here to watch. */
 .calm .edge-live, .calm .edge-fading,
 .calm .node-live, .calm .agent-dot-live, .calm .nib { animation: none; }
-.calm .ink-stroke, .calm .ink-reveal {
-  animation: none;
-  stroke-dashoffset: 0;
-  clip-path: none;
-}
 /* --- hand-drawn diagrams --------------------------------------------------
    Each stroke has pathLength=1, so a dash of length 1 offset by 1 hides it
    and animating the offset to 0 traces it from start to end like a pen.     */

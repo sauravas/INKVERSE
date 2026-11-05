@@ -17,6 +17,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from .. import agents, config, db, imaging, obs, resources
+from ..ws import hub
 from ..ai import registry
 from ..ai.base import Notice, ProviderError
 from ..ai.parser import StepStreamParser, events_to_steps
@@ -35,6 +36,9 @@ class ExtractIn(BaseModel):
 class SolveIn(BaseModel):
     question: str
     subject: str = ""
+    # the shared workspace this was asked from, so the answer reaches the
+    # other device too rather than only the screen that pressed Solve
+    room: str | None = None
     question_id: str | None = None
     subject_id: str | None = None
     module_id: str | None = None
@@ -160,24 +164,42 @@ async def extract(body: ExtractIn):
 
 
 async def _stream_events(agen, *, run=None, on_done=None, sources=None,
-                         notices=None):
+                         notices=None, room=None):
     """Parse a raw model stream into typed SSE events.
 
     Events are accumulated as they are emitted so the finished answer can be
     persisted without re-parsing.
+
+    When a room is given the same typed events are also broadcast to it, which
+    is what makes an answer belong to the shared page rather than to whichever
+    device happened to ask. The phone and the laptop are one workspace; an
+    answer that only appeared on the screen that pressed Solve would be the
+    one thing in the app that was not.
     """
+    async def share(ev):
+        if not room:
+            return
+        try:
+            await hub.broadcast(room, {"t": "answer", "event": ev})
+        except Exception:
+            pass          # a dead socket must never break the answer
     parser = StepStreamParser()
     seen: list[dict] = []
     t0 = time.perf_counter()
     first = None
     try:
-        yield _sse({"type": "start", "ts": t0,
-                    "trace": run.id if run else None})
+        start = {"type": "start", "ts": t0, "trace": run.id if run else None}
+        await share(start)
+        yield _sse(start)
         if sources:
             # what the answer was grounded in, so the student can check it
-            yield _sse({"type": "sources", "items": sources})
+            ev = {"type": "sources", "items": sources}
+            await share(ev)
+            yield _sse(ev)
         for note in notices or []:
-            yield _sse({"type": "notice", "message": note})
+            ev = {"type": "notice", "message": note}
+            await share(ev)
+            yield _sse(ev)
         # aclosing: a Stop from the student closes the agent cleanly, so its
         # span ends as "cancelled" instead of dangling until garbage collection
         async with contextlib.aclosing(agen) as stream:
@@ -191,9 +213,11 @@ async def _stream_events(agen, *, run=None, on_done=None, sources=None,
                     yield _sse({"type": "first_token", "ttft_s": first})
                 for ev in parser.feed(chunk):
                     seen.append(ev)
+                    await share(ev)
                     yield _sse(ev)
         for ev in parser.finish():
             seen.append(ev)
+            await share(ev)
             yield _sse(ev)
 
         steps = events_to_steps(seen)
@@ -204,9 +228,11 @@ async def _stream_events(agen, *, run=None, on_done=None, sources=None,
                 on_done(parser.text(), steps)
             except Exception:
                 pass
-        yield _sse({"type": "done", "ttft_s": first,
-                    "total_s": round(time.perf_counter() - t0, 2),
-                    "steps": len(steps)})
+        fin = {"type": "done", "ttft_s": first,
+               "total_s": round(time.perf_counter() - t0, 2),
+               "steps": len(steps)}
+        await share(fin)
+        yield _sse(fin)
     except ProviderError as e:
         if run:
             run.fail(str(e))
@@ -257,10 +283,16 @@ async def solve(body: SolveIn, request: Request):
                 obs.emit("step", "Web search off - staying on this machine",
                          step="researcher", skipped=True)
             obs.emit("route", "Routing confirmed question to Tutor", to="tutor")
+            if body.room:
+                # the other device should show the question being worked on,
+                # not just the answer arriving out of nowhere
+                await hub.broadcast(body.room,
+                                    {"t": "asking", "question": body.question})
             async for chunk in _stream_events(
                     agents.tutor(p, body.question, body.subject, context,
                                  body.session),
-                    run=run, on_done=persist, sources=used, notices=notices):
+                    run=run, on_done=persist, sources=used, notices=notices,
+                    room=body.room):
                 yield chunk
 
     return StreamingResponse(gen(), media_type="text/event-stream",

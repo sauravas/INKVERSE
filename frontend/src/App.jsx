@@ -17,6 +17,7 @@ import PracticeView from './components/PracticeView'
 import { SourcesNote, useStepQuestions } from './components/StepTools'
 import { api, streamSteps } from './lib/api'
 import { PEN_COLORS } from './lib/ink'
+import { useSharedAnswer } from './lib/shared-answer'
 import { useWorkspace } from './lib/sync'
 import { applyChoice, differences } from './lib/clarify'
 import { canSpeak, speak, speakableStep } from './lib/speak'
@@ -48,6 +49,9 @@ export default function App() {
   const canvas = useRef(null)
   const sheetRef = useRef(null)
   const deskRef = useRef(null)   // the desk around the page hosts the agent rails
+  // true while this laptop is the one asking, so it renders from its own
+  // stream and ignores the echo of its own answer coming back off the socket
+  const asking = useRef(false)
 
   const [view, setView] = useState('notebook')
   // Calm mode stops every looping animation. The model and the browser share
@@ -55,8 +59,21 @@ export default function App() {
   // generated the compositor can be starved enough to flash the window. There
   // is nothing the page can do about the contention itself; it can stop adding
   // to it. Remembered, because someone who needs it needs it every time.
+  // Motion is off by default. The looping animations in the agent rails
+  // repaint a large SVG on every frame, which on integrated graphics competes
+  // with the model badly enough to tear the screen - steady with the window
+  // small, where the rails are hidden, and unusable maximised, where they are
+  // not. Nothing about the app needs them to move.
   const [calm, setCalm] = useState(
-    () => localStorage.getItem('inkwise.calm') === '1')
+    () => localStorage.getItem('inkwise.calm') !== '0')
+
+  // And the panels themselves can be put away: with the window maximised they
+  // are the only thing on screen that is not the notebook.
+  const [rails, setRails] = useState(
+    () => localStorage.getItem('inkwise.rails') !== '0')
+  useEffect(() => {
+    localStorage.setItem('inkwise.rails', rails ? '1' : '0')
+  }, [rails])
   // How wide the sheet is drawn. Everything on the page - the ruled lines,
   // the ink, the handwriting of the answer - is in proportion to this, so it
   // behaves like moving the notebook closer or further away rather than like
@@ -67,6 +84,7 @@ export default function App() {
   useEffect(() => { localStorage.setItem('inkwise.paper', String(paperW)) }, [paperW])
   useEffect(() => {
     document.documentElement.classList.toggle('calm', calm)
+    document.documentElement.classList.toggle('motion', !calm)
     localStorage.setItem('inkwise.calm', calm ? '1' : '0')
   }, [calm])
 
@@ -208,15 +226,19 @@ export default function App() {
     }
     setErr(null); setPhase('solving'); setSteps([]); setSources([]); setNotices([])
     setStats(null)
+    asking.current = true
     abortRef.current = streamSteps('/api/ai/solve', {
       question: q, subject: extracted?.subject_guess || '',
       provider, consent_cloud: !!consent, question_id: questionId, web,
       session: sessionLog.current.slice(-3),
+      // so the phone sees the same answer being written, live
+      room,
     }, {
       onSteps: (st) => { setSteps(st); lastSteps.current = st },
       onSources: setSources,
       onNotice: (n) => setNotices((x) => [...x, n]),
       onDone: (s) => {
+        asking.current = false
         setStats(s); setPhase('done')
         // remember the question and its result for follow-on questions
         const final = lastSteps.current.find((x) => x.final) || lastSteps.current.at(-1)
@@ -228,7 +250,7 @@ export default function App() {
         }
         voiceTurn.current = false
       },
-      onError: (e) => { setErr(e.message); setPhase('idle') },
+      onError: (e) => { asking.current = false; setErr(e.message); setPhase('idle') },
     })
   }
 
@@ -259,6 +281,17 @@ export default function App() {
     setSources([]); ask.setExplanations({}); setSelectedStep(null)
     setView('notebook')
   }
+
+  // An answer the phone asked for belongs to this page too: follow it here
+  // rather than leaving the laptop showing a stale page while the student
+  // reads the answer on their phone.
+  const shared = useSharedAnswer(sync)
+  useEffect(() => {
+    if (asking.current || !shared) return
+    if (shared.question) setQuestionText(shared.question)
+    setSteps(shared.steps || [])
+    setPhase(shared.streaming ? 'solving' : 'done')
+  }, [shared])
 
   // bring the answer into view as soon as the pen starts
   useEffect(() => {
@@ -318,6 +351,7 @@ export default function App() {
       <TopBar
         view={view} setView={setView} calm={calm} onToggleCalm={() => setCalm((c) => !c)}
         paperW={paperW} setPaperW={setPaperW}
+        rails={rails} onToggleRails={() => setRails((r) => !r)}
         sync={sync} onPair={() => setShowPair(true)}
         provider={provider} setProvider={setProvider} providers={providers}
         health={health} onRefreshHealth={refreshHealth}
@@ -383,7 +417,7 @@ export default function App() {
 
           {/* the desk: page in the middle, agent graph and log in the margins */}
           <div ref={deskRef} className="relative flex min-h-0 flex-1 flex-col">
-          <AgentRails hostRef={deskRef} provider={provider} />
+          {rails && <AgentRails hostRef={deskRef} provider={provider} />}
           {/* the notebook: question written on top, answer written below it */}
           <div ref={sheetRef}
                className="scroll-thin min-h-0 flex-1 overflow-y-auto bg-[#eceadf] py-5">
@@ -487,7 +521,7 @@ export default function App() {
 /* -------------------------------------------------------------------- bars */
 
 function TopBar({ view, setView, sync, onPair, provider, setProvider, providers,
-                 calm, onToggleCalm, paperW, setPaperW,
+                 calm, onToggleCalm, paperW, setPaperW, rails, onToggleRails,
                   health, onRefreshHealth, web, onToggleWeb, speakAll, onToggleSpeak }) {
   const phones = sync.peers.filter((p) => p.role === 'phone').length
   const dot = sync.status === 'live' ? '#0ca30c'
@@ -544,6 +578,15 @@ function TopBar({ view, setView, sync, onPair, provider, setProvider, providers,
           <option value={880}>Page: large</option>
           <option value={1100}>Page: huge</option>
         </select>
+        <button onClick={onToggleRails}
+                title={rails
+                  ? 'Hide the agent panels and give the window to the notebook'
+                  : 'Show the agent panels beside the notebook'}
+                className={`rounded-lg px-2 py-1 ${rails
+                  ? 'bg-indigo-50 text-indigo-800 ring-1 ring-indigo-300'
+                  : 'text-ink-soft hover:bg-black/5'}`}>
+          {rails ? '◫ Agents' : '▭ Agents off'}
+        </button>
         <button onClick={onToggleCalm}
                 title={calm
                   ? 'Calm mode on: no looping animations. Use this if the screen '

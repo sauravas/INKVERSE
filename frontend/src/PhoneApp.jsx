@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import AnswerSheet from './components/AnswerSheet'
 import InkCanvas from './components/InkCanvas'
+import LinedInput from './components/LinedInput'
+import { api, streamSteps } from './lib/api'
+import { useSharedAnswer } from './lib/shared-answer'
 import { PEN_COLORS } from './lib/ink'
 import { useWorkspace } from './lib/sync'
 
@@ -21,6 +25,72 @@ export default function PhoneApp() {
   const [pages, setPages] = useState([])
   const [active, setActive] = useState(0)
   const [ink, setInk] = useState(0)
+
+  // The phone is a whole client, not a pen that happens to have a screen: it
+  // can ask, correct what was read, and read the answer. Anything it asks is
+  // broadcast to the workspace, so the laptop shows it too - and anything the
+  // laptop asks arrives here the same way.
+  const [phase, setPhase] = useState('idle')   // idle|reading|review|solving|done
+  const [question, setQuestion] = useState('')
+  const [typed, setTyped] = useState('')
+  const [steps, setSteps] = useState([])
+  const [err, setErr] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const mine = useRef(false)
+  const shared = useSharedAnswer(sync)
+  const scrollRef = useRef(null)
+  const answerRef = useRef(null)
+  const answering = phase === 'solving' || phase === 'done'
+
+  // bring the answer into view the moment it starts being written
+  useEffect(() => {
+    if (phase === 'solving') {
+      answerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  }, [phase])
+
+  // follow the laptop unless this phone is the one asking
+  useEffect(() => {
+    if (mine.current || !shared) return
+    setQuestion(shared.question || '')
+    setSteps(shared.steps || [])
+    setPhase(shared.streaming ? 'solving' : 'done')
+  }, [shared])
+
+  const solve = async (text) => {
+    const q = (text || '').trim()
+    if (!q) return
+    mine.current = true
+    setErr(null); setQuestion(q); setSteps([]); setPhase('solving'); setBusy(true)
+    const latest = { current: [] }
+    streamSteps('/api/ai/solve', { question: q, room, provider: null }, {
+      onSteps: (st) => { latest.current = st; setSteps(st) },
+      onDone: () => { setPhase('done'); setBusy(false); mine.current = false },
+      onError: (e) => {
+        setErr(e.message); setPhase('idle'); setBusy(false); mine.current = false
+      },
+    })
+  }
+
+  // read the page, then let the student correct it before it is solved
+  const readPage = async () => {
+    if (!canvas.current) return
+    setErr(null); setBusy(true); setPhase('reading')
+    try {
+      const png = canvas.current.toPng({ pad: 20, minSide: 40 })
+      const out = await api.extract({ image: png })
+      if (out.blank) {
+        setErr('Nothing written on this page yet.')
+        setPhase('idle'); setBusy(false); return
+      }
+      setQuestion(out.question || '')
+      setPhase('review')
+    } catch (e) {
+      setErr(e.message); setPhase('idle')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const onPagesChange = useCallback((p, a) => { setPages(p); setActive(a) }, [])
   const onInkChange = useCallback((n) => setInk(n), [])
@@ -69,14 +139,73 @@ export default function PhoneApp() {
         <span className="ml-auto text-ink-soft">
           p{active + 1}/{pages.length || 1} · {ink}
         </span>
+        <button onClick={readPage} disabled={busy || !ink}
+                className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium
+                           text-white disabled:opacity-40">
+          {phase === 'reading' ? 'Reading…' : 'Solve'}
+        </button>
       </header>
 
-      <div className="min-h-0 flex-1 p-2">
-        <InkCanvas
-          ref={canvas} sync={sync} tool={tool} color={color} size={size}
-          palmRejection
-          onPagesChange={onPagesChange} onInkChange={onInkChange}
-        />
+      {err && (
+        <div className="bg-red-50 px-3 py-2 text-xs text-red-700">{err}</div>
+      )}
+
+      {phase === 'review' && (
+        <div className="bg-amber-50 px-3 py-2">
+          <p className="mb-1 text-xs text-amber-900">
+            Is this what you wrote? Correct it if not.
+          </p>
+          <textarea value={question} onChange={(e) => setQuestion(e.target.value)}
+                    rows={2}
+                    className="w-full rounded-lg border border-amber-300 bg-white
+                               px-2 py-1.5 text-sm" />
+          <div className="mt-1.5 flex gap-2">
+            <button onClick={() => solve(question)}
+                    className="rounded-lg bg-ink px-3 py-1.5 text-sm text-white">
+              Yes — solve it
+            </button>
+            <button onClick={readPage}
+                    className="rounded-lg border border-black/15 px-3 py-1.5 text-sm">
+              Read again
+            </button>
+            <button onClick={() => setPhase('idle')}
+                    className="px-2 py-1.5 text-sm text-ink-soft">cancel</button>
+          </div>
+        </div>
+      )}
+
+      <div ref={scrollRef} className="scroll-thin min-h-0 flex-1 overflow-y-auto p-2">
+        {/* the pad has the screen to itself until there is an answer to read,
+            then it gives up half of it rather than making the student scroll
+            a full page of blank ruled paper to find the answer */}
+        <div className={answering ? '' : 'h-full'}
+             style={answering ? { height: '44vh' } : undefined}>
+          <InkCanvas
+            ref={canvas} sync={sync} tool={tool} color={color} size={size}
+            palmRejection
+            onPagesChange={onPagesChange} onInkChange={onInkChange}
+          />
+        </div>
+
+        {phase === 'idle' && (
+          <div data-paper className="ruled mt-2 rounded-sm px-3 py-1">
+            <LinedInput value={typed} onChange={setTyped}
+                        placeholder="…or type your question"
+                        onSubmit={() => { solve(typed); setTyped('') }}
+                        disabled={busy} />
+          </div>
+        )}
+
+        {answering && (
+          <div ref={answerRef} data-paper className="ruled mt-2 rounded-sm px-3 py-2">
+            {question && (
+              <p className="lined-row hand text-[1.1rem] text-ink-soft">{question}</p>
+            )}
+            <div className="lined-row hand text-[1.2rem] text-emerald-800">Answer</div>
+            <AnswerSheet steps={steps} streaming={phase === 'solving'}
+                         emptyHint="Working on it…" />
+          </div>
+        )}
       </div>
 
       <div className="scroll-thin flex items-center gap-1.5 overflow-x-auto
