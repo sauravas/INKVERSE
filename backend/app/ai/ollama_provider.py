@@ -18,7 +18,7 @@ from typing import AsyncIterator
 import httpx
 
 from .. import config, obs, resources
-from . import prompts
+from . import http, prompts
 from .base import ProviderError
 
 
@@ -41,14 +41,14 @@ class OllamaProvider:
 
     # -- infra -------------------------------------------------------------
     async def _tags(self) -> dict[str, int]:
-        async with httpx.AsyncClient(timeout=5) as c:
+        async with http.session(5) as c:
             r = await c.get(f"{self.url}/api/tags")
             r.raise_for_status()
             return {m["name"]: m.get("size", 0) for m in r.json().get("models", [])}
 
     async def _loaded(self) -> set[str]:
         try:
-            async with httpx.AsyncClient(timeout=5) as c:
+            async with http.session(5) as c:
                 r = await c.get(f"{self.url}/api/ps")
                 r.raise_for_status()
                 return {m["name"] for m in r.json().get("models", [])}
@@ -66,7 +66,7 @@ class OllamaProvider:
             return self._caps[model]
         caps: set[str] = set()
         try:
-            async with httpx.AsyncClient(timeout=20) as c:
+            async with http.session(20) as c:
                 r = await c.post(f"{self.url}/api/show", json={"model": model})
                 r.raise_for_status()
                 caps = set(r.json().get("capabilities") or [])
@@ -148,7 +148,7 @@ class OllamaProvider:
         """Evict a model from memory immediately."""
         targets = [model] if model else sorted(await self._loaded())
         done = []
-        async with httpx.AsyncClient(timeout=30) as c:
+        async with http.session(30) as c:
             for m in targets:
                 try:
                     await c.post(f"{self.url}/api/generate",
@@ -198,7 +198,7 @@ class OllamaProvider:
         for attempt in range(attempts):
             produced = False
             try:
-                async with httpx.AsyncClient(timeout=config.REQUEST_TIMEOUT) as c:
+                async with http.session(config.REQUEST_TIMEOUT) as c:
                     async with c.stream("POST", f"{self.url}/api/chat",
                                         json=body) as r:
                         if r.status_code >= 400:

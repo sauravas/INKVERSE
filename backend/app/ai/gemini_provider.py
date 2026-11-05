@@ -14,7 +14,7 @@ import httpx
 
 from .. import config, obs
 from .base import ProviderError
-from . import prompts
+from . import http, prompts
 
 
 class GeminiProvider:
@@ -56,7 +56,7 @@ class GeminiProvider:
         obs.emit("model.call", f"{self.model} (cloud, user consented)",
                  model=self.model, warm=True, provider="gemini")
         try:
-            async with httpx.AsyncClient(timeout=config.REQUEST_TIMEOUT) as c:
+            async with http.session(config.REQUEST_TIMEOUT) as c:
                 async with c.stream("POST", url, json=body,
                                     headers={"x-goog-api-key": self._key}) as r:
                     if r.status_code >= 400:

@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import config, db, resources
+from .ai import http
 from .routers import ai, notebook, pair, study
 from .routers import obs as obs_router
 from .ws import hub
@@ -17,7 +18,9 @@ from .ws import hub
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init()
+    http.client()        # pay the one-off TLS setup now, not during a solve
     yield
+    await http.aclose()
 
 
 app = FastAPI(title="INKWISE", version="1.0", lifespan=lifespan)
