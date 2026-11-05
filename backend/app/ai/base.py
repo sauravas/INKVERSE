@@ -31,6 +31,15 @@ class AIProvider(Protocol):
         """A module's study notes, in the same block protocol as answers."""
         ...
 
+    def examine(self, question: str, model_answer: str, attempt: str,
+                marks: float | None = None) -> AsyncIterator[str]:
+        """Mark one handwritten attempt against the model answer."""
+        ...
+
+    async def read_attempt(self, image_b64: str) -> str:
+        """Transcribe a student's working verbatim, mistakes included."""
+        ...
+
 
 class ProviderError(RuntimeError):
     pass

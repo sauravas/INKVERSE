@@ -40,7 +40,9 @@ class OllamaProvider:
         self._caps: dict[str, set[str]] = {}
         # models pinned to the CPU because the GPU driver cannot run them here
         self._cpu_only: set[str] = set()
-        if config.VISION_CPU:
+        if config.CPU_ONLY:
+            self._cpu_only.update({self.vision_model, self.text_model})
+        elif config.VISION_CPU:
             self._cpu_only.add(self.vision_model)
         # consecutive crashes per model, reset by a successful request
         self._crashes: dict[str, int] = {}
@@ -524,6 +526,26 @@ class OllamaProvider:
              {"role": "user", "content": prompts.NOTES_USER.format(
                  subject=subject, module=module, material_block=mb, questions_block=qb)}],
             num_predict=2600, temp=0.3, think=False)
+
+    def examine(self, question: str, model_answer: str, attempt: str,
+                marks: float | None = None) -> AsyncIterator[str]:
+        return self._text(
+            [{"role": "system", "content": prompts.EXAMINER_SYSTEM},
+             {"role": "user", "content": prompts.EXAMINER_USER.format(
+                 question=question, model_answer=(model_answer or "")[:6000],
+                 attempt=(attempt or "")[:4000],
+                 marks_line=(f"This question is out of {marks:g} marks.\n\n"
+                             if marks else ""))}],
+            num_predict=1100, temp=0.2, think=False)
+
+    async def read_attempt(self, image_b64: str) -> str:
+        """Transcribe the student's own working, mistakes and all."""
+        return (await self._complete(
+            self.vision_model,
+            [{"role": "system", "content": prompts.ATTEMPT_SYSTEM},
+             {"role": "user", "content": prompts.ATTEMPT_USER,
+              "images": [image_b64]}],
+            num_predict=900, temp=0.1)).strip()
 
     def hint(self, question: str, context: str = "") -> AsyncIterator[str]:
         return self._text(

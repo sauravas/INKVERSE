@@ -130,6 +130,28 @@ class GeminiProvider:
                                 context_block=prompts.context_block(context))}],
                             max_tokens=900)
 
+    def examine(self, question: str, model_answer: str, attempt: str,
+                marks: float | None = None) -> AsyncIterator[str]:
+        return self._stream(prompts.EXAMINER_SYSTEM,
+                            [{"text": prompts.EXAMINER_USER.format(
+                                question=question,
+                                model_answer=(model_answer or "")[:6000],
+                                attempt=(attempt or "")[:4000],
+                                marks_line=(f"This question is out of {marks:g} marks.\n\n"
+                                            if marks else ""))}],
+                            max_tokens=1100, temp=0.2)
+
+    async def read_attempt(self, image_b64: str) -> str:
+        acc = []
+        async for piece in self._stream(
+            prompts.ATTEMPT_SYSTEM,
+            [{"text": prompts.ATTEMPT_USER},
+             {"inlineData": {"mimeType": "image/png", "data": image_b64}}],
+            temp=0.1, max_tokens=900,
+        ):
+            acc.append(piece)
+        return "".join(acc).strip()
+
     def notes(self, subject: str, module: str, material: str = "",
               questions: list | None = None) -> AsyncIterator[str]:
         mb, qb = prompts.notes_material(material, questions or [])

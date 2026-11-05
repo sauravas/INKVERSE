@@ -10,8 +10,8 @@ from fastapi.staticfiles import StaticFiles
 
 from . import config, db, resources, speech
 from .ai import http
-from .routers import (ai, imports, notebook, notes, pair, practice, study,
-                      study_notes)
+from .routers import (ai, imports, notebook, notes, pair, practice, revision,
+                      study, study_notes)
 from .routers import obs as obs_router
 from .ws import hub
 
@@ -40,6 +40,7 @@ app.include_router(imports.router)
 app.include_router(practice.router)
 app.include_router(notes.router)
 app.include_router(study_notes.router)
+app.include_router(revision.router)
 app.include_router(obs_router.router)
 
 

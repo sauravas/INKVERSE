@@ -112,7 +112,12 @@ def check(name, cond, detail=""):
 
 print("topology")
 t = c.get("/api/obs/agents?provider=local").json()
-check("9 active agents + 1 planned", t["counts"] == {"active": 9, "planned": 1}, t["counts"])
+check("every declared agent is built - nothing left as planned",
+      t["counts"] == {"active": 11, "planned": 0}, t["counts"])
+check("the Examiner marks attempts for real",
+      next(a for a in t["agents"] if a["id"] == "examiner")["status"] == "active")
+check("the Planner decides revision by rule, not by model",
+      next(a for a in t["agents"] if a["id"] == "planner")["kind"] == "rules")
 check("models resolved from provider",
       {r["id"]: r["detail"] for r in t["resources"]}["vision"] == "fake-vision")
 

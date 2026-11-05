@@ -20,6 +20,7 @@ export const AGENT_COLORS = {
   researcher: '#b91c1c',
   hinter: '#4d7c0f',
   notewriter: '#7e22ce',
+  planner: '#be185d',
 }
 
 export const AGENT_SHORT = {
@@ -34,6 +35,7 @@ export const AGENT_SHORT = {
   researcher: 'Research',
   hinter: 'Hint',
   notewriter: 'Notes',
+  planner: 'Planner',
 }
 
 const MAX_EVENTS = 400

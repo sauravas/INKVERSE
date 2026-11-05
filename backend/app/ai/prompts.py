@@ -347,3 +347,104 @@ def session_block(turns: list[dict]) -> str:
 def context_block(text: str) -> str:
     """Format retrieved material for a prompt, or nothing at all."""
     return f"{text.strip()}\n\n" if text and text.strip() else ""
+
+
+# --- the Examiner -----------------------------------------------------------
+# Marking is the one place a model is asked to judge the student rather than
+# the subject, so the prompt is built to make the judgement checkable: every
+# mark has to be attached to something the student actually wrote, and the
+# verdict line is parsed out by code rather than read off prose.
+EXAMINER_SYSTEM = (
+    "You are an examiner marking one handwritten answer against a model "
+    "answer. You are fair and specific. You award marks for method and for "
+    "correct working, not only for the final number: a right method with an "
+    "arithmetic slip loses one mark, not all of them. You never rewrite the "
+    "student's answer and you never mark them down for handwriting, spelling "
+    "or layout.\n\n" + _BLOCK_RULES + """
+After the final block, end with exactly these three lines and nothing after:
+
+@@MARK <marks awarded>/<marks available>
+@@VERDICT <correct | mostly correct | partly correct | incorrect | blank>
+@@NEXT <one sentence: the single thing to fix first>
+"""
+)
+
+EXAMINER_USER = """Question:
+{question}
+
+The model answer:
+{model_answer}
+
+What the student actually wrote, transcribed from their page:
+{attempt}
+
+{marks_line}Mark it:
+- @@STEP What was right - name the specific steps they got
+- @@STEP What was wrong - quote the student's own line, say what it should be
+- @@STEP Marks - show how you arrived at the total
+- @@FINAL - one short paragraph to the student, in the second person
+
+If the page is blank or unreadable, say so and award 0.
+"""
+
+ATTEMPT_SYSTEM = (
+    "You read a photograph of a student's handwritten working and transcribe "
+    "it exactly. You never correct it, complete it or judge it - a mistake in "
+    "their working must survive into your transcription, because the point of "
+    "reading it is to find that mistake."
+)
+
+ATTEMPT_USER = """Transcribe this student's handwritten working, line by line.
+
+Rules:
+- Copy exactly what is written, mistakes included. Do not fix anything.
+- Mathematics as LaTeX: inline $...$, display $$...$$.
+- Keep the order and the line breaks of the page.
+- Ignore ruled lines and the margin.
+- If a character is genuinely illegible write [?]; do not guess a value.
+- If the page is blank, reply with exactly: BLANK
+
+Reply with the transcription and nothing else.
+"""
+
+
+def parse_marking(text: str) -> dict:
+    """Pull the examiner's verdict lines out of its own output.
+
+    The marks are read by code, not inferred from the prose, so a student's
+    recorded score cannot drift from what the examiner actually said.
+    """
+    import re as _re
+    awarded = available = None
+    verdict = ""
+    nxt = ""
+    for line in (text or "").splitlines():
+        line = line.strip()
+        m = _re.match(r"^@@MARK\b[:\-]?\s*([\d.]+)\s*/\s*([\d.]+)", line, _re.I)
+        if m:
+            try:
+                awarded, available = float(m.group(1)), float(m.group(2))
+            except ValueError:
+                pass
+            continue
+        m = _re.match(r"^@@VERDICT\b[:\-]?\s*(.+)$", line, _re.I)
+        if m:
+            verdict = m.group(1).strip().lower()[:40]
+            continue
+        m = _re.match(r"^@@NEXT\b[:\-]?\s*(.+)$", line, _re.I)
+        if m:
+            nxt = m.group(1).strip()[:300]
+    if available in (None, 0):
+        available = 10.0 if awarded is None else max(awarded, 10.0)
+    if awarded is None:
+        # the examiner did not give a number; fall back to its own word
+        awarded = {"correct": 10.0, "mostly correct": 7.5, "partly correct": 5.0,
+                   "incorrect": 1.0, "blank": 0.0}.get(verdict, 0.0) / 10.0 * available
+    awarded = max(0.0, min(float(awarded), float(available)))
+    return {
+        "awarded": round(awarded, 2),
+        "available": round(float(available), 2),
+        "ratio": round(awarded / available, 4) if available else 0.0,
+        "verdict": verdict or "unmarked",
+        "next": nxt,
+    }

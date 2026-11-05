@@ -58,6 +58,13 @@ AUTOSTART_OLLAMA = os.getenv("INKWISE_AUTOSTART_OLLAMA", "1") == "1"
 # so this is only needed to skip the first failure.
 VISION_CPU = os.getenv("INKWISE_VISION_CPU", "0") == "1"
 
+# Leave the GPU to the screen. On a laptop with integrated graphics the model
+# and the display are the same chip, and a model that fills it can make the
+# desktop tear, shimmer or flash while it works - something no amount of work
+# in the browser can fix, because it happens below it. Setting this runs both
+# stages on the CPU: slower answers, a steady screen.
+CPU_ONLY = os.getenv("INKWISE_CPU_ONLY", "0") == "1"
+
 # Longest side of the page image sent to the vision model. Smaller images mean
 # smaller encoder allocations, which is what the driver above chokes on.
 VISION_MAX_SIDE = int(os.getenv("INKWISE_VISION_MAX_SIDE", "1100"))

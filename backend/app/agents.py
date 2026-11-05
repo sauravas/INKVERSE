@@ -70,10 +70,14 @@ AGENTS = [
      "status": "active",
      "role": "Computes exam readiness and blockers from real question rows",
      "invoked_by": "GET /api/study/dashboard"},
+    {"id": "planner", "name": "Planner Agent", "kind": "rules", "stage": "db",
+     "status": "active",
+     "role": "Decides what to revise next and names the weakest topics",
+     "invoked_by": "GET /api/revision/plan"},
     {"id": "examiner", "name": "Examiner Agent", "kind": "llm", "stage": "text",
-     "status": "planned",
-     "role": "Will mark a student's own handwritten attempt against a rubric",
-     "invoked_by": "not built yet"},
+     "status": "active",
+     "role": "Marks the student's own handwritten attempt against the answer",
+     "invoked_by": "POST /api/practice/question/{id}/mark"},
 ]
 
 # (from, to, label, kind) - kind: route | delegate | uses
@@ -91,13 +95,17 @@ EDGES = [
     ("orchestrator", "explainer", "explain one step", "route"),
     ("explainer", "reader", "handwritten ask", "delegate"),
     ("orchestrator", "mentor", "dashboard", "route"),
-    ("orchestrator", "examiner", "planned", "route"),
+    ("orchestrator", "planner", "what next", "route"),
+    ("mentor", "planner", "weak modules", "delegate"),
+    ("orchestrator", "examiner", "mark my attempt", "route"),
+    ("examiner", "reader", "read the working", "delegate"),
     ("reader", "vision", "", "uses"),
     ("verifier", "vision", "", "uses"),
     ("tutor", "text", "", "uses"),
     ("explainer", "text", "", "uses"),
     ("examiner", "text", "", "uses"),
     ("mentor", "db", "", "uses"),
+    ("planner", "db", "", "uses"),
     ("librarian", "db", "", "uses"),
     ("hinter", "text", "", "uses"),
     ("notewriter", "text", "", "uses"),
@@ -142,6 +150,17 @@ FLOWS = [
         {"id": "parse", "agent": "orchestrator", "label": "Modules and questions proposed"},
         {"id": "review", "agent": "orchestrator", "label": "Student corrects the proposal"},
         {"id": "commit", "agent": "orchestrator", "label": "Filed and indexed"},
+    ]},
+    {"id": "mark", "name": "Mark my attempt", "steps": [
+        {"id": "consent", "agent": "orchestrator", "label": "Consent gate"},
+        {"id": "reader", "agent": "reader", "label": "Reader transcribes the working"},
+        {"id": "examiner", "agent": "examiner", "label": "Examiner marks it"},
+        {"id": "parse", "agent": "orchestrator", "label": "Marks read out by code"},
+        {"id": "save", "agent": "orchestrator", "label": "Recorded as a recall attempt"},
+    ]},
+    {"id": "revision", "name": "What to revise", "steps": [
+        {"id": "planner", "agent": "planner", "label": "Planner scores every question"},
+        {"id": "verdict", "agent": "orchestrator", "label": "Queue + weak topics returned"},
     ]},
     {"id": "dashboard", "name": "Readiness", "steps": [
         {"id": "mentor", "agent": "mentor", "label": "Mentor checks each subject"},
@@ -355,3 +374,37 @@ async def researcher(query: str):
                      f"No web results ({w.get('skipped') or w.get('error') or 'none'})",
                      level="warn")
     return w
+
+
+async def read_working(provider, image_b64: str) -> str:
+    """Reader, transcribing the student's own working rather than a question.
+
+    A different job from reading a question: here a mistake has to survive the
+    transcription, because the mistake is the thing being looked for.
+    """
+    model = _model(provider, "vision")
+    with obs.span("reader", f"Transcribing the student's working with {model}",
+                  model=model, caller="examiner"):
+        text = await provider.read_attempt(image_b64)
+        obs.emit("agent.output",
+                 "Page is blank" if text.strip().upper() == "BLANK"
+                 else f"Read {len(text.splitlines())} line(s) of working",
+                 chars=len(text))
+    return "" if text.strip().upper() == "BLANK" else text
+
+
+async def examiner(provider, question: str, model_answer: str, attempt: str,
+                   marks=None):
+    model = _model(provider, "text")
+    with obs.span("examiner", f"Marking an attempt at \u201c{obs.preview(question, 40)}\u201d",
+                  model=model, out_of=marks):
+        n = 0
+        async with contextlib.aclosing(
+                provider.examine(question, model_answer, attempt, marks)) as st:
+            async for chunk in st:
+                if n == 0:
+                    obs.emit("model.first_token", "First tokens streaming",
+                             model=model)
+                n += 1
+                yield chunk
+        obs.emit("agent.output", f"Marking streamed ({n} chunks)", chunks=n)

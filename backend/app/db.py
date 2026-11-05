@@ -139,6 +139,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunks USING fts5(
 
 # columns added after the first release; applied idempotently on startup
 MIGRATIONS = [
+    ("attempts", "marking_json", "TEXT"),
     ("questions", "source_id", "TEXT"),
     ("questions", "position", "INTEGER NOT NULL DEFAULT 0"),
     ("questions", "marks", "TEXT"),
