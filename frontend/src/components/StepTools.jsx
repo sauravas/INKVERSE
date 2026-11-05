@@ -101,20 +101,34 @@ export function AskInline({ step, padRef, text, setText, onSubmit, onCancel }) {
   )
 }
 
-/** Which of the student's own imported material an answer drew on. */
-export function SourcesNote({ items }) {
-  if (!items?.length) return null
-  const names = [...new Set(items.map((s) => s.heading || 'your notes'))]
+/** What an answer drew on: the student's own material, and the web if enabled. */
+export function SourcesNote({ items, notices }) {
+  const own = (items || []).filter((s) => s.kind !== 'web')
+  const web = (items || []).filter((s) => s.kind === 'web')
+  if (!own.length && !web.length && !notices?.length) return null
+  const names = [...new Set(own.map((s) => s.heading || 'your notes'))]
   return (
-    <div className="mb-2 flex flex-wrap items-center gap-1.5 text-[11px] text-ink-soft">
-      <span>Grounded in</span>
-      {names.map((n) => (
-        <span key={n} title={items.find((s) => (s.heading || 'your notes') === n)?.snippet}
-              className="rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-800
-                         ring-1 ring-emerald-200">
-          {n}
-        </span>
-      ))}
+    <div className="mb-2 space-y-1 text-[11px] text-ink-soft">
+      {(names.length > 0 || web.length > 0) && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span>Grounded in</span>
+          {names.map((n) => (
+            <span key={n} title={own.find((s) => (s.heading || 'your notes') === n)?.snippet}
+                  className="rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-800
+                             ring-1 ring-emerald-200">
+              {n}
+            </span>
+          ))}
+          {web.map((w) => (
+            <a key={w.url} href={w.url} target="_blank" rel="noreferrer" title={w.snippet}
+               className="rounded-full bg-sky-50 px-2 py-0.5 text-sky-800 ring-1
+                          ring-sky-200 hover:underline">
+              {w.site}: {w.title}
+            </a>
+          ))}
+        </div>
+      )}
+      {(notices || []).map((n) => <div key={n} className="text-ink-soft/80">{n}</div>)}
     </div>
   )
 }

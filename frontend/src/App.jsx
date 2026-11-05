@@ -12,6 +12,7 @@ import { PEN_COLORS } from './lib/ink'
 import { useWorkspace } from './lib/sync'
 
 const ROOM_KEY = 'inkwise.room'
+const WEB_KEY = 'inkwise.web'
 const VIEWS = [
   ['notebook', 'Notebook'], ['practice', 'Question bank'],
   ['dashboard', 'Dashboard'], ['import', 'Import'],
@@ -55,6 +56,17 @@ export default function App() {
   const [questionText, setQuestionText] = useState('')
   const [steps, setSteps] = useState([])
   const [sources, setSources] = useState([])
+  const [notices, setNotices] = useState([])
+  // off by default: turning it on sends question text to Wikipedia/DuckDuckGo
+  const [web, setWeb] = useState(() => localStorage.getItem(WEB_KEY) === '1')
+  const toggleWeb = () => {
+    if (!web && !window.confirm(
+      'Web search looks your question up on Wikipedia and DuckDuckGo for '
+      + 'up-to-date facts. That sends the question text to them (never your '
+      + 'handwriting or notes). Turn it on?')) return
+    localStorage.setItem(WEB_KEY, web ? '0' : '1')
+    setWeb(!web)
+  }
   const [err, setErr] = useState(null)
   const [stats, setStats] = useState(null)
   const [questionId, setQuestionId] = useState(null)
@@ -134,13 +146,15 @@ export default function App() {
   const solve = () => {
     const q = questionText.trim()
     if (!q) return
-    setErr(null); setPhase('solving'); setSteps([]); setSources([]); setStats(null)
+    setErr(null); setPhase('solving'); setSteps([]); setSources([]); setNotices([])
+    setStats(null)
     abortRef.current = streamSteps('/api/ai/solve', {
       question: q, subject: extracted?.subject_guess || '',
-      provider, consent_cloud: !!consent, question_id: questionId,
+      provider, consent_cloud: !!consent, question_id: questionId, web,
     }, {
       onSteps: setSteps,
       onSources: setSources,
+      onNotice: (n) => setNotices((x) => [...x, n]),
       onDone: (s) => { setStats(s); setPhase('done') },
       onError: (e) => { setErr(e.message); setPhase('idle') },
     })
@@ -192,7 +206,7 @@ export default function App() {
   })
 
   const busy = phase === 'extracting' || phase === 'solving'
-  const ai = { provider, consent }
+  const ai = { provider, consent, web }
 
   return (
     <div className="flex h-full flex-col">
@@ -201,6 +215,7 @@ export default function App() {
         sync={sync} onPair={() => setShowPair(true)}
         provider={provider} setProvider={setProvider} providers={providers}
         health={health} onRefreshHealth={refreshHealth}
+        web={web} onToggleWeb={toggleWeb}
       />
 
       {view === 'dashboard' && (
@@ -283,7 +298,7 @@ export default function App() {
                         </span>
                       )}
                     </div>
-                    <SourcesNote items={sources} />
+                    <SourcesNote items={sources} notices={notices} />
 
                     <AnswerSheet
                       steps={steps}
@@ -330,7 +345,7 @@ export default function App() {
 /* -------------------------------------------------------------------- bars */
 
 function TopBar({ view, setView, sync, onPair, provider, setProvider, providers,
-                  health, onRefreshHealth }) {
+                  health, onRefreshHealth, web, onToggleWeb }) {
   const phones = sync.peers.filter((p) => p.role === 'phone').length
   const dot = sync.status === 'live' ? '#0ca30c'
     : sync.status === 'offline' ? '#d03b3b' : '#fab219'
@@ -359,6 +374,13 @@ function TopBar({ view, setView, sync, onPair, provider, setProvider, providers,
             </option>
           ))}
         </select>
+        <button onClick={onToggleWeb}
+                title={web ? 'Web search on: questions are also looked up on Wikipedia '
+                  + 'and DuckDuckGo' : 'Web search off: answers use only this machine'}
+                className={`rounded-lg px-2 py-1 ${web
+                  ? 'bg-sky-50 text-sky-800 ring-1 ring-sky-300' : 'text-ink-soft hover:bg-black/5'}`}>
+          🌐 Web {web ? 'on' : 'off'}
+        </button>
         <span className="inline-flex items-center gap-1.5">
           <span className="inline-block h-2 w-2 rounded-full" style={{ background: dot }} />
           {sync.status}{sync.latency != null && sync.status === 'live'

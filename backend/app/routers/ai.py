@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from .. import config, db, imaging, resources, retrieval
+from .. import config, db, imaging, resources, retrieval, websearch
 from ..ai import registry
 from ..ai.base import ProviderError
 from ..ai.parser import StepStreamParser, events_to_steps
@@ -37,6 +37,8 @@ class SolveIn(BaseModel):
     module_id: str | None = None
     provider: str | None = None
     consent_cloud: bool = False
+    # also look the question up on the web; sends its text to Wikipedia/DDG
+    web: bool = False
 
 
 class HintIn(BaseModel):
@@ -108,7 +110,7 @@ async def extract(body: ExtractIn):
     return out
 
 
-async def _stream_events(agen, *, on_done=None, sources=None):
+async def _stream_events(agen, *, on_done=None, sources=None, notices=None):
     """Parse a raw model stream into typed SSE events.
 
     Events are accumulated as they are emitted so the finished answer can be
@@ -123,6 +125,8 @@ async def _stream_events(agen, *, on_done=None, sources=None):
         if sources:
             # what the answer was grounded in, so the student can check it
             yield _sse({"type": "sources", "items": sources})
+        for note in notices or []:
+            yield _sse({"type": "notice", "message": note})
         async for chunk in agen:
             if first is None:
                 first = round(time.perf_counter() - t0, 2)
@@ -166,9 +170,20 @@ async def solve(body: SolveIn, request: Request):
 
     context, used = retrieval.context_for(
         body.question, body.question_id, body.subject_id, body.module_id)
+    notices = []
+    if body.web:
+        w = await websearch.lookup(body.question)
+        if w["block"]:
+            context = "\n\n".join(x for x in (context, w["block"]) if x)
+            used = used + w["sources"]
+        elif w.get("skipped"):
+            notices.append(f"Web search skipped: {w['skipped']}.")
+        else:
+            notices.append(f"No web results ({w.get('error') or 'none found'}); "
+                           "answering from the local model alone.")
     agen = p.solve(body.question, body.subject, context)
     return StreamingResponse(
-        _stream_events(agen, on_done=persist, sources=used),
+        _stream_events(agen, on_done=persist, sources=used, notices=notices),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
                  "Connection": "keep-alive"})

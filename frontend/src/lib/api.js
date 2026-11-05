@@ -101,14 +101,16 @@ export const api = {
 
 /**
  * Stream a typed-event endpoint and fold it into steps as it arrives.
- * Handlers: onSteps(steps), onSources(items), onDone(stats), onError(err).
+ * Handlers: onSteps(steps), onSources(items), onNotice(text), onDone(stats),
+ * onError(err).
  * Returns an abort function.
  */
-export function streamSteps(url, body, { onSteps, onSources, onDone, onError, onEvent } = {}) {
+export function streamSteps(url, body, { onSteps, onSources, onNotice, onDone, onError, onEvent } = {}) {
   const acc = []
   return streamEvents(url, body, (ev) => {
     onEvent?.(ev)
     if (ev.type === 'sources') { onSources?.(ev.items || []); return }
+    if (ev.type === 'notice') { onNotice?.(ev.message); return }
     if (ev.type === 'error') { onError?.(new Error(ev.message)); return }
     if (ev.type === 'done') { onDone?.({ ttft: ev.ttft_s, total: ev.total_s }); return }
     if (ev.type === 'step_open' || ev.type === 'segment') {

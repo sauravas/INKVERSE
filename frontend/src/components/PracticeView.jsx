@@ -272,10 +272,11 @@ function Session({ module, sync, ai, pen, onExit, onNotes }) {
     setAnswer({ steps: [], streaming: true })
     abortRef.current = streamSteps('/api/ai/solve', {
       question: q.text, question_id: q.id,
-      provider: ai.provider, consent_cloud: !!ai.consent,
+      provider: ai.provider, consent_cloud: !!ai.consent, web: !!ai.web,
     }, {
       onSteps: (st) => { answerSteps.current = st; setAnswer((a) => ({ ...a, steps: st })) },
       onSources: (items) => setAnswer((a) => ({ ...a, sources: items })),
+      onNotice: (n) => setAnswer((a) => ({ ...a, notices: [...(a.notices || []), n] })),
       onDone: () => {
         const st = answerSteps.current
         setAnswer((a) => ({ ...a, streaming: false }))
@@ -420,7 +421,7 @@ function Session({ module, sync, ai, pen, onExit, onNotes }) {
                 <div className="mb-2 border-t border-dashed border-rule pt-3">
                   <span className="hand text-[1.6rem] text-emerald-800">Answer</span>
                 </div>
-                <SourcesNote items={answer.sources} />
+                <SourcesNote items={answer.sources} notices={answer.notices} />
                 <AnswerSheet steps={answer.steps} streaming={answer.streaming}
                              instant={answer.instant} emptyHint="Working it out…"
                              onAskStep={(s) => ask.setAsking(s)}
