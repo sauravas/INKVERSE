@@ -186,6 +186,13 @@ class OllamaProvider:
         other = self.text_model if model == self.vision_model else self.vision_model
         if other == model:
             return
+        # Two models only fight over memory if they are both on the GPU. Once
+        # one of them has been moved to the CPU - because the driver could not
+        # run it, or because INKWISE_VISION_CPU says so - there is nothing to
+        # evict for, and evicting anyway costs a 15 second reload on every
+        # handwritten question.
+        if model in self._cpu_only or other in self._cpu_only:
+            return
         if other in await self._loaded():
             obs.emit("model.evict",
                      f"Evicting {other} so {model} can load (one stage at a time)",
@@ -504,7 +511,7 @@ class OllamaProvider:
                  question=question, subject_line=sl,
                  context_block=prompts.context_block(context),
                  session_block=prompts.session_block(session or []))}],
-            num_predict=2048, temp=0.3, think=False)
+            num_predict=1400, temp=0.3, think=False)
 
     def explain(self, question: str, answer: str, step: str,
                 ask: str, context: str = "",

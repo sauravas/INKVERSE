@@ -171,6 +171,11 @@ def bfs(graph, start):
   Inside @@CODE write the code exactly as it would be typed - real newlines,
   real indentation, no LaTeX at all.
 - Keep each step to one idea a student can follow.
+- Write the working, not an essay about the working. No preamble, no
+  restating the question, no "Let's", no summing up what you just did, no
+  congratulating the student. A step is a line of maths and the one sentence
+  that justifies it.
+- Do not repeat a formula you have already written out once.
 
 Diagrams: when the answer describes a structure, architecture, block diagram,
 process flow, cycle, pipeline, state transitions or hierarchy, draw it inside

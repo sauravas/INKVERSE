@@ -62,23 +62,6 @@ export default function App() {
     localStorage.setItem('inkwise.calm', calm ? '1' : '0')
   }, [calm])
 
-  // Fullscreen is a different presentation path in the browser, and on a
-  // laptop whose GPU is also running the model it is the one that breaks up.
-  // Marking it lets the stylesheet keep the page on the ordinary compositing
-  // path while it is fullscreen.
-  useEffect(() => {
-    const mark = () => document.documentElement.classList
-      .toggle('is-fullscreen', !!document.fullscreenElement
-        || window.matchMedia('(display-mode: fullscreen)').matches
-        || window.innerHeight === screen.height)
-    mark()
-    document.addEventListener('fullscreenchange', mark)
-    window.addEventListener('resize', mark)
-    return () => {
-      document.removeEventListener('fullscreenchange', mark)
-      window.removeEventListener('resize', mark)
-    }
-  }, [])
   const [tool, setTool] = useState('pen')
   const [color, setColor] = useState(PEN_COLORS[0])
   const [size, setSize] = useState(2.4)

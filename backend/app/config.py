@@ -32,10 +32,18 @@ TEXT_MODEL = os.getenv("INKWISE_TEXT_MODEL", "qwen2.5:14b")
 # Opt-in single-model mode: accurate, slow, memory-hungry.
 HEAVY_MODEL = os.getenv("INKWISE_HEAVY_MODEL", "gemma4:26b")
 OLLAMA_MODEL = TEXT_MODEL  # back-compat alias
+# Context size. Measured: reading the prompt costs 0.1-0.6s out of a ~50s
+# answer, so shrinking this buys nothing - and because num_ctx is a load-time
+# parameter, *changing* it between requests forces a full 15s reload. Keep it
+# one value for every request type.
 OLLAMA_NUM_CTX = int(os.getenv("INKWISE_NUM_CTX", "8192"))
 # gemma4 defaults thinking ON, which roughly triples latency. Off unless asked.
 OLLAMA_THINK = os.getenv("INKWISE_THINK", "0") == "1"
-OLLAMA_KEEP_ALIVE = os.getenv("INKWISE_KEEP_ALIVE", "10m")
+# How long a model stays in memory after a request. Loading the 14b takes
+# about 15 seconds on this machine, which is the whole of the wait before an
+# answer starts, so letting it fall out of memory between questions is the
+# most expensive setting in the file.
+OLLAMA_KEEP_ALIVE = os.getenv("INKWISE_KEEP_ALIVE", "60m")
 
 # RAM guard: refuse to load a model that would leave less than this free.
 MIN_FREE_RAM_GB = float(os.getenv("INKWISE_MIN_FREE_RAM_GB", "3.0"))
