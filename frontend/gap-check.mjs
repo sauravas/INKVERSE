@@ -40,7 +40,7 @@ console.log('canvas height after 3-line question:', Math.round(b.height), 'px')
 
 // go to the dashboard, open the pre-seeded solved question
 await page.evaluate(() => [...document.querySelectorAll('button')]
-  .find((btn) => btn.textContent.trim() === 'dashboard')?.click())
+  .find((btn) => btn.textContent.trim().toLowerCase() === 'dashboard')?.click())
 await new Promise((r) => setTimeout(r, 800))
 await page.evaluate(() => [...document.querySelectorAll('button')]
   .find((btn) => btn.textContent.includes('Engineering Mathematics'))?.click())

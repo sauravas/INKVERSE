@@ -54,7 +54,7 @@ const writeOnCanvas = async (page) => {
 await shot('/', '../bench/shot-notebook.png', { width: 1440, height: 900 }, writeOnCanvas)
 await shot('/', '../bench/shot-dashboard.png', { width: 1440, height: 1100 }, async (p) => {
   await p.evaluate(() => [...document.querySelectorAll('button')]
-    .find((b) => b.textContent.trim() === 'dashboard')?.click())
+    .find((b) => b.textContent.trim().toLowerCase() === 'dashboard')?.click())
   await new Promise((r) => setTimeout(r, 800))
   // expand the first subject so modules + questions are visible
   await p.evaluate(() => [...document.querySelectorAll('button')]
@@ -68,7 +68,7 @@ await shot('/phone?room=shotdemo', '../bench/shot-phone.png',
 // Open a solved question from the dashboard so the answer sheet renders.
 await shot('/', '../bench/shot-answer.png', { width: 1440, height: 1000 }, async (p) => {
   await p.evaluate(() => [...document.querySelectorAll('button')]
-    .find((b) => b.textContent.trim() === 'dashboard')?.click())
+    .find((b) => b.textContent.trim().toLowerCase() === 'dashboard')?.click())
   await new Promise((r) => setTimeout(r, 800))
   await p.evaluate(() => [...document.querySelectorAll('button')]
     .find((b) => b.textContent.includes('Engineering Mathematics'))?.click())

@@ -137,6 +137,15 @@ async def open_share(token: str):
     return data
 
 
+@router.get("/api/share/{token}/bundle")
+async def share_bundle(token: str):
+    """Let a friend viewing a share link save the notes into their own INKWISE."""
+    s = db.one("SELECT * FROM shares WHERE token=?", (token,))
+    if not s or s["revoked"]:
+        raise HTTPException(404, "This share link does not exist or was turned off.")
+    return await export(subject_id=s["subject_id"], module_id=s["module_id"])
+
+
 @router.delete("/api/share/{token}")
 async def revoke_share(token: str):
     db.run("UPDATE shares SET revoked=1 WHERE token=?", (token,))

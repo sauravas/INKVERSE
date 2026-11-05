@@ -1,16 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import AnswerSheet, {
-  RichText, stepToText, stepsFromEvents, stepsToText,
-} from './components/AnswerSheet'
+import AnswerSheet, { stepsToText } from './components/AnswerSheet'
 import Dashboard from './components/Dashboard'
+import ImportView from './components/ImportView'
 import InkCanvas from './components/InkCanvas'
-import MiniPad from './components/MiniPad'
 import PairPanel from './components/PairPanel'
-import { api, streamEvents } from './lib/api'
+import { PenTools, ToolBtn } from './components/PenTools'
+import PracticeView from './components/PracticeView'
+import { SourcesNote, useStepQuestions } from './components/StepTools'
+import { api, streamSteps } from './lib/api'
 import { PEN_COLORS } from './lib/ink'
 import { useWorkspace } from './lib/sync'
 
 const ROOM_KEY = 'inkwise.room'
+const VIEWS = [
+  ['notebook', 'Notebook'], ['practice', 'Question bank'],
+  ['dashboard', 'Dashboard'], ['import', 'Import'],
+]
+// question-bank answer pages live in the same workspace, prefixed with q-
+const isQuestionPage = (p) => !!p?.id?.startsWith('q-')
 
 function initialRoom() {
   const q = new URLSearchParams(location.search).get('room')
@@ -37,6 +44,7 @@ export default function App() {
   const [active, setActive] = useState(0)
   const [inkCount, setInkCount] = useState(0)
   const [showPair, setShowPair] = useState(false)
+  const freePageRef = useRef(null)
 
   // --- AI state (kept entirely out of the writing path) -------------------
   const [provider, setProvider] = useState('local')
@@ -46,12 +54,11 @@ export default function App() {
   const [extracted, setExtracted] = useState(null)
   const [questionText, setQuestionText] = useState('')
   const [steps, setSteps] = useState([])
+  const [sources, setSources] = useState([])
   const [err, setErr] = useState(null)
   const [stats, setStats] = useState(null)
   const [questionId, setQuestionId] = useState(null)
   const [selectedStep, setSelectedStep] = useState(null)
-  const [asking, setAsking] = useState(null)
-  const [explanations, setExplanations] = useState({})
   const [toast, setToast] = useState(null)
   const abortRef = useRef(null)
 
@@ -73,12 +80,30 @@ export default function App() {
     return () => clearTimeout(t)
   }, [toast])
 
-  const onPagesChange = useCallback((p, a) => { setPages(p); setActive(a) }, [])
+  const onPagesChange = useCallback((p, a) => {
+    setPages(p); setActive(a)
+    if (p[a] && !isQuestionPage(p[a])) freePageRef.current = p[a].id
+  }, [])
   const onInkChange = useCallback((n) => setInkCount(n), [])
+
+  // Leaving the question bank leaves the workspace on a question's page; the
+  // free notebook must not open onto someone's practice answer.
+  useEffect(() => {
+    if (view !== 'notebook') return
+    if (isQuestionPage(pages[active])) {
+      const target = freePageRef.current
+        || pages.find((p) => !isQuestionPage(p))?.id || 'notebook'
+      sync.send({ t: 'page_open', id: target, title: 'Notebook' })
+    }
+  }, [view, pages, active, sync])
 
   const consent = useMemo(
     () => providers.find((p) => p.name === provider)?.requires_consent,
     [providers, provider])
+
+  const ask = useStepQuestions({
+    question: questionText, steps, questionId, provider, consent,
+  })
 
   // --- solve pipeline -----------------------------------------------------
   const readPage = async () => {
@@ -86,8 +111,8 @@ export default function App() {
     const png = canvas.current?.toPng()
     if (!png) { setErr('Nothing is written on this page yet.'); return }
     setPhase('extracting')
-    setSteps([]); setStats(null); setQuestionId(null)
-    setExplanations({}); setSelectedStep(null)
+    setSteps([]); setSources([]); setStats(null); setQuestionId(null)
+    ask.setExplanations({}); setSelectedStep(null)
     try {
       if (consent && !window.confirm(
         'This sends your handwritten page to Google Gemini, off this machine. Continue?')) {
@@ -109,21 +134,16 @@ export default function App() {
   const solve = () => {
     const q = questionText.trim()
     if (!q) return
-    setErr(null); setPhase('solving'); setSteps([]); setStats(null)
-    const acc = []
-    abortRef.current = streamEvents('/api/ai/solve', {
+    setErr(null); setPhase('solving'); setSteps([]); setSources([]); setStats(null)
+    abortRef.current = streamSteps('/api/ai/solve', {
       question: q, subject: extracted?.subject_guess || '',
       provider, consent_cloud: !!consent, question_id: questionId,
-    }, (ev) => {
-      if (ev.type === 'error') { setErr(ev.message); setPhase('idle'); return }
-      if (ev.type === 'done') {
-        setStats({ ttft: ev.ttft_s, total: ev.total_s }); setPhase('done'); return
-      }
-      if (ev.type === 'step_open' || ev.type === 'segment') {
-        acc.push(ev)
-        setSteps(stepsFromEvents(acc))
-      }
-    }, (e) => { setErr(e.message); setPhase('idle') })
+    }, {
+      onSteps: setSteps,
+      onSources: setSources,
+      onDone: (s) => { setStats(s); setPhase('done') },
+      onError: (e) => { setErr(e.message); setPhase('idle') },
+    })
   }
 
   const stop = () => { abortRef.current?.(); setPhase(steps.length ? 'done' : 'idle') }
@@ -142,55 +162,6 @@ export default function App() {
     } catch (e) { setErr(e.message) }
   }
 
-  // --- follow-up on one step ---------------------------------------------
-  const padRef = useRef(null)
-  const [askText, setAskText] = useState('')
-
-  const submitAsk = async () => {
-    const step = asking
-    if (!step) return
-    const png = padRef.current?.isEmpty() ? null : padRef.current?.toPng()
-    const text = askText.trim()
-    if (!png && !text) return
-
-    setExplanations((p) => ({
-      ...p, [step.index]: { ask: text || '(handwritten)', steps: [], streaming: true },
-    }))
-    const acc = []
-    streamEvents('/api/ai/explain', {
-      question: questionText, answer: stepsToText(steps),
-      step: stepToText(step), step_index: step.index,
-      ask: text, ask_image: png, question_id: questionId,
-      provider, consent_cloud: !!consent,
-    }, (ev) => {
-      if (ev.type === 'ask') {
-        setExplanations((p) => ({
-          ...p, [step.index]: { ...p[step.index], ask: ev.value } }))
-        return
-      }
-      if (ev.type === 'error') {
-        setExplanations((p) => ({
-          ...p, [step.index]: { ...p[step.index], streaming: false, error: ev.message } }))
-        return
-      }
-      if (ev.type === 'done') {
-        setExplanations((p) => ({
-          ...p, [step.index]: { ...p[step.index], streaming: false } }))
-        return
-      }
-      if (ev.type === 'step_open' || ev.type === 'segment') {
-        acc.push(ev)
-        const built = stepsFromEvents(acc)
-        setExplanations((p) => ({ ...p, [step.index]: { ...p[step.index], steps: built } }))
-      }
-    }, (e) => {
-      setExplanations((p) => ({
-        ...p, [step.index]: { ...p[step.index], streaming: false, error: e.message } }))
-    })
-
-    setAsking(null); setAskText(''); padRef.current?.clear()
-  }
-
   // bring the answer into view as soon as the pen starts
   useEffect(() => {
     if (phase === 'solving' && sheetRef.current) {
@@ -201,6 +172,7 @@ export default function App() {
 
   // --- keyboard -----------------------------------------------------------
   useEffect(() => {
+    if (view !== 'notebook') return undefined
     const onKey = (e) => {
       if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return
       const mod = e.ctrlKey || e.metaKey
@@ -220,6 +192,7 @@ export default function App() {
   })
 
   const busy = phase === 'extracting' || phase === 'solving'
+  const ai = { provider, consent }
 
   return (
     <div className="flex h-full flex-col">
@@ -230,24 +203,35 @@ export default function App() {
         health={health} onRefreshHealth={refreshHealth}
       />
 
-      {view === 'dashboard' ? (
+      {view === 'dashboard' && (
         <Dashboard onOpenQuestion={(q) => {
           setQuestionText(q.text); setQuestionId(q.id)
           try {
             const s = q.answer_json ? JSON.parse(q.answer_json) : []
             setSteps(s); setStats(null); setPhase(s.length ? 'done' : 'review')
           } catch { setSteps([]); setPhase('review') }
-          setExplanations({}); setSelectedStep(null)
+          setSources([]); ask.setExplanations({}); setSelectedStep(null)
           setView('notebook')
         }} />
-      ) : (
+      )}
+
+      {view === 'import' && (
+        <ImportView onPractise={() => setView('practice')} />
+      )}
+
+      {view === 'practice' && (
+        <PracticeView sync={sync} ai={ai} tool={tool} setTool={setTool}
+                      color={color} setColor={setColor} size={size} setSize={setSize}
+                      onImport={() => setView('import')} />
+      )}
+
+      {view === 'notebook' && (
         <div className="flex min-h-0 flex-1 flex-col">
           <Toolbar
             tool={tool} setTool={setTool} color={color} setColor={setColor}
             size={size} setSize={setSize} canvas={canvas}
             pages={pages} active={active} inkCount={inkCount}
-            busy={busy} phase={phase} stats={stats}
-            onSolve={readPage} onStop={stop}
+            busy={busy} onSolve={readPage} onStop={stop}
             canSave={steps.length > 0 && !questionId}
             onSaveStudy={saveToStudy}
             onSaveNotebook={async () => {
@@ -299,6 +283,7 @@ export default function App() {
                         </span>
                       )}
                     </div>
+                    <SourcesNote items={sources} />
 
                     <AnswerSheet
                       steps={steps}
@@ -306,24 +291,9 @@ export default function App() {
                       instant={phase === 'done' && !stats}
                       selectedStep={selectedStep}
                       onSelectStep={setSelectedStep}
-                      onAskStep={(s) => { setSelectedStep(s); setAsking(s) }}
+                      onAskStep={(s) => { setSelectedStep(s); ask.setAsking(s) }}
                       emptyHint=" "
-                      afterStep={(s) => (
-                        <>
-                          {explanations[s.index] && (
-                            <MarginNote index={s.index} ex={explanations[s.index]} />
-                          )}
-                          {asking?.index === s.index && (
-                            <AskInline
-                              step={s} padRef={padRef} text={askText}
-                              setText={setAskText} onSubmit={submitAsk}
-                              onCancel={() => {
-                                setAsking(null); setAskText(''); padRef.current?.clear()
-                              }}
-                            />
-                          )}
-                        </>
-                      )}
+                      afterStep={ask.afterStep}
                     />
                   </div>
                 )}
@@ -370,11 +340,11 @@ function TopBar({ view, setView, sync, onPair, provider, setProvider, providers,
       <span className="hand text-2xl tracking-wide">INKWISE</span>
 
       <nav className="ml-3 flex gap-1 rounded-lg bg-black/5 p-0.5 text-sm">
-        {['notebook', 'dashboard'].map((v) => (
+        {VIEWS.map(([v, label]) => (
           <button key={v} onClick={() => setView(v)}
-                  className={`rounded-md px-3 py-1 capitalize ${
+                  className={`whitespace-nowrap rounded-md px-3 py-1 ${
                     view === v ? 'bg-white shadow-sm' : 'text-ink-soft'}`}>
-            {v}
+            {label}
           </button>
         ))}
       </nav>
@@ -439,44 +409,20 @@ function ModelPill({ health, onRefresh }) {
 }
 
 function Toolbar({ tool, setTool, color, setColor, size, setSize, canvas,
-                   pages, active, inkCount, busy, phase, stats, onSolve, onStop,
+                   pages, active, inkCount, busy, onSolve, onStop,
                    canSave, onSaveStudy, onSaveNotebook }) {
-  const Btn = ({ on, children, ...p }) => (
-    <button {...p}
-      className={`shrink-0 whitespace-nowrap rounded-md px-2.5 py-1.5 text-sm ${
-        on ? 'bg-ink text-white' : 'hover:bg-black/5'}`}>{children}</button>
-  )
+  const freePages = pages.filter((p) => !isQuestionPage(p))
+  const pos = freePages.findIndex((p) => p.id === pages[active]?.id)
   return (
     <div className="scroll-thin flex items-center gap-1 overflow-x-auto border-b
                     border-black/10 bg-[#fbf9f3] px-3 py-1.5">
-      <Btn on={tool === 'pen'} onClick={() => setTool('pen')} title="Pen (p)">✒︎ Pen</Btn>
-      <Btn on={tool === 'highlighter'} onClick={() => setTool('highlighter')}
-           title="Highlighter (h)">▭ Mark</Btn>
-      <Btn on={tool === 'eraser'} onClick={() => setTool('eraser')}
-           title="Eraser (e)">⌫ Erase</Btn>
-
-      <span className="mx-1 h-5 w-px shrink-0 bg-black/10" />
-      {PEN_COLORS.map((c) => (
-        <button key={c} onClick={() => { setColor(c); setTool('pen') }} title={c}
-                className={`h-5 w-5 shrink-0 rounded-full ring-offset-1 ${
-                  color === c ? 'ring-2 ring-ink' : 'ring-1 ring-black/15'}`}
-                style={{ background: c }} />
-      ))}
-      <input type="range" min="1" max="6" step="0.2" value={size}
-             onChange={(e) => setSize(parseFloat(e.target.value))}
-             className="mx-2 w-20 shrink-0" title="Pen width" />
-
-      <span className="mx-1 h-5 w-px shrink-0 bg-black/10" />
-      <Btn onClick={() => canvas.current?.undo()} title="Undo (Ctrl+Z)">↶</Btn>
-      <Btn onClick={() => canvas.current?.redo()} title="Redo (Ctrl+Y)">↷</Btn>
-      <Btn onClick={() => { if (confirm('Clear this page?')) canvas.current?.clear() }}>
-        Clear
-      </Btn>
-      <Btn onClick={() => canvas.current?.addPage()}>+ Page</Btn>
+      <PenTools tool={tool} setTool={setTool} color={color} setColor={setColor}
+                size={size} setSize={setSize} canvas={canvas} />
+      <ToolBtn onClick={() => canvas.current?.addPage()}>+ Page</ToolBtn>
       <span className="shrink-0 whitespace-nowrap px-1 text-xs text-ink-soft">
-        {active + 1}/{pages.length || 1} · {inkCount} strokes
+        {Math.max(1, pos + 1)}/{freePages.length || 1} · {inkCount} strokes
       </span>
-      <Btn onClick={onSaveNotebook} title="Save notebook to disk">💾</Btn>
+      <ToolBtn onClick={onSaveNotebook} title="Save notebook to disk">💾</ToolBtn>
 
       <span className="ml-auto flex shrink-0 items-center gap-2 pl-2">
         {canSave && (
@@ -504,15 +450,17 @@ function Toolbar({ tool, setTool, color, setColor, size, setSize, canvas,
 }
 
 function PageStrip({ pages, active, canvas }) {
-  if (pages.length <= 1) return null
+  // question-bank pages are reached from the question bank, not listed here
+  const free = pages.map((p, i) => ({ p, i })).filter(({ p }) => !isQuestionPage(p))
+  if (free.length <= 1) return null
   return (
     <div className="flex items-center gap-1.5 overflow-x-auto border-t border-black/10
                     bg-[#fbf9f3] px-3 py-1.5">
-      {pages.map((p, i) => (
+      {free.map(({ p, i }, n) => (
         <button key={p.id} onClick={() => canvas.current?.selectPage(i)}
                 className={`shrink-0 rounded px-2 py-1 text-xs ${
                   i === active ? 'bg-ink text-white' : 'bg-black/5 hover:bg-black/10'}`}>
-          {i + 1}
+          {n + 1}
         </button>
       ))}
       <button onClick={() => canvas.current?.deletePage(active)}
@@ -582,49 +530,6 @@ function ReviewBar({ extracted, value, onChange, onSolve, onReread, onCancel }) 
             Read again
           </button>
         </div>
-      </div>
-    </div>
-  )
-}
-
-function MarginNote({ index, ex }) {
-  return (
-    <div className="my-2 ml-6 rounded-lg border-l-4 border-amber-400 bg-amber-50/60
-                    px-4 py-3">
-      <div className="mb-1 text-[11px] font-medium uppercase tracking-wide
-                      text-amber-900/80">
-        About step {index} — you asked
-      </div>
-      <RichText text={ex.ask}
-                className="hand mb-2 block text-[1.2rem] leading-6 text-amber-950" />
-      {ex.error
-        ? <p className="text-sm text-red-700">{ex.error}</p>
-        : <AnswerSheet steps={ex.steps} streaming={ex.streaming} dense />}
-    </div>
-  )
-}
-
-function AskInline({ step, padRef, text, setText, onSubmit, onCancel }) {
-  return (
-    <div className="my-2 ml-6 rounded-lg border border-amber-300 bg-amber-50/70 px-4 py-3">
-      <div className="mb-2 flex items-center gap-2">
-        <span className="text-xs font-medium">
-          Ask about {step.final ? 'the final answer' : `step ${step.index}`}
-        </span>
-        <button onClick={onCancel}
-                className="ml-auto text-xs text-ink-soft hover:underline">cancel</button>
-      </div>
-      <MiniPad ref={padRef} height={88}
-               placeholder="write your question here — or type it below" />
-      <div className="mt-2 flex gap-2">
-        <input value={text} onChange={(e) => setText(e.target.value)}
-               onKeyDown={(e) => { if (e.key === 'Enter') onSubmit() }}
-               placeholder="…or type it"
-               className="flex-1 rounded-lg border border-black/15 px-3 py-1.5 text-sm" />
-        <button onClick={onSubmit}
-                className="rounded-lg bg-accent px-3 py-1.5 text-sm text-white">
-          Explain
-        </button>
       </div>
     </div>
   )

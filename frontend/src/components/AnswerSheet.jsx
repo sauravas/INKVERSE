@@ -263,21 +263,47 @@ const INLINE_SPLIT =
   /\$\$(.+?)\$\$|\\\[(.+?)\\\]|\\\((.+?)\\\)|\$([^$\n]+?)\$/gs
 
 /** Render a plain string, typesetting any LaTeX it contains. */
+/** Split a plain string into text and math segments. */
+export function splitRich(text) {
+  const out = []
+  let pos = 0
+  const re = new RegExp(INLINE_SPLIT)
+  let m
+  while ((m = re.exec(text || '')) !== null) {
+    if (m.index > pos) out.push({ kind: 'text', value: text.slice(pos, m.index) })
+    const display = m[1] !== undefined || m[2] !== undefined
+    out.push({ kind: 'math', display, value: m[1] ?? m[2] ?? m[3] ?? m[4] })
+    pos = m.index + m[0].length
+  }
+  if (pos < (text || '').length) out.push({ kind: 'text', value: text.slice(pos) })
+  return out
+}
+
+/**
+ * A string written out by the pen, at the same steady rate as answers.
+ * Used to write a question-bank question onto the page when it opens.
+ */
+export function WrittenText({ text, className, animate = true }) {
+  const segs = useMemo(() => splitRich(text), [text])
+  const offsets = useMemo(() => {
+    let run = 0
+    return segs.map((s) => { const o = run; run += segLen(s); return o })
+  }, [segs])
+  const total = segs.reduce((n, s) => n + segLen(s), 0)
+  const revealed = useWriter(total, !animate)
+  return (
+    <span className={className}>
+      {segs.map((s, i) => (
+        <Segment key={`${text.length}-${i}`} seg={s} revealed={revealed}
+                 offset={offsets[i]} />
+      ))}
+      {revealed < total && <span className="nib" />}
+    </span>
+  )
+}
+
 export function RichText({ text, className }) {
-  const parts = useMemo(() => {
-    const out = []
-    let pos = 0
-    const re = new RegExp(INLINE_SPLIT)
-    let m
-    while ((m = re.exec(text)) !== null) {
-      if (m.index > pos) out.push({ kind: 'text', value: text.slice(pos, m.index) })
-      const display = m[1] !== undefined || m[2] !== undefined
-      out.push({ kind: 'math', display, value: m[1] ?? m[2] ?? m[3] ?? m[4] })
-      pos = m.index + m[0].length
-    }
-    if (pos < text.length) out.push({ kind: 'text', value: text.slice(pos) })
-    return out
-  }, [text])
+  const parts = useMemo(() => splitRich(text), [text])
 
   return (
     <span className={className}>
