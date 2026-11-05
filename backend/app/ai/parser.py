@@ -8,8 +8,39 @@ from __future__ import annotations
 
 import re
 
+from .diagram import parse_edge_list
+
 STEP_RE = re.compile(r"^\s*@@STEP\b[:\-]?\s*(.*)$")
 FINAL_RE = re.compile(r"^\s*@@FINAL\b[:\-]?\s*(.*)$")
+DIAGRAM_RE = re.compile(r"^\s*@@DIAGRAM\b[:\-]?\s*(.*)$")
+END_RE = re.compile(r"^\s*@@END\b")
+# a Markdown pipe-table row; a table needs at least two columns to count
+TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
+TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$")
+MAX_TABLE_COLS = 12
+MAX_TABLE_ROWS = 30
+
+
+def parse_table(lines: list[str]) -> dict | None:
+    """Rows of a pipe table -> {"header": [...], "rows": [[...]]}, or None."""
+    rows: list[list[str]] = []
+    header = None
+    for raw in lines:
+        if TABLE_SEP_RE.match(raw):
+            if rows and header is None:
+                header = rows.pop()
+            continue
+        body = raw.strip().strip("|").replace("\\|", "\u0000")
+        rows.append([c.strip().replace("\u0000", "|") for c in body.split("|")])
+    if header is None and rows:
+        header = rows.pop(0)
+    if not header or len(header) < 2 or not rows:
+        return None
+    n = min(len(header), MAX_TABLE_COLS)
+    return {
+        "header": [h[:120] for h in header[:n]],
+        "rows": [[c[:160] for c in (r + [""] * n)[:n]] for r in rows[:MAX_TABLE_ROWS]],
+    }
 
 # Models disagree on math delimiters: qwen2.5 emits \( \) and \[ \], gemma and
 # most others use $ and $$. Both are accepted. Display forms are matched first
@@ -47,6 +78,10 @@ class StepStreamParser:
         self.display_close = "$$"     # delimiter that will close it
         self.display_acc: list[str] = []
         self.plain = []               # accumulated raw text, for persistence
+        self.in_diagram = False       # inside @@DIAGRAM ... @@END
+        self.diagram_title = ""
+        self.diagram_lines: list[str] = []
+        self.table_lines: list[str] = []   # pipe-table rows awaiting their end
 
     # -- public ------------------------------------------------------------
     def feed(self, chunk: str) -> list[dict]:
@@ -66,6 +101,10 @@ class StepStreamParser:
         if self.buf.strip():
             out.extend(self._line(self.buf))
         self.buf = ""
+        if self.table_lines:
+            out.extend(self._close_table())
+        if self.in_diagram:
+            out.extend(self._close_diagram())
         if self.in_display and self.display_acc:
             out.append(self._math("\n".join(self.display_acc), True))
             self.display_acc, self.in_display = [], False
@@ -92,6 +131,33 @@ class StepStreamParser:
         return {"type": "segment", "index": self.index, "kind": "math",
                 "value": (value or "").strip(), "display": display}
 
+    def _close_table(self) -> list[dict]:
+        lines, self.table_lines = self.table_lines, []
+        t = parse_table(lines)
+        if t is None:
+            # one column, or a lone |x|: not a table, so it stays text
+            out = []
+            for line in lines:
+                out.extend(self._inline(line.strip()))
+            return out
+        return [{"type": "segment", "index": self.index, "kind": "table",
+                 "value": "", "display": True, "table": t}]
+
+    def _close_diagram(self) -> list[dict]:
+        self.in_diagram = False
+        d = parse_edge_list(self.diagram_title, self.diagram_lines)
+        lines, self.diagram_lines = self.diagram_lines, []
+        if d is None:
+            # not a usable graph: keep what the model meant, as plain text
+            out = []
+            for line in lines:
+                if line.strip():
+                    out.append(self._text(line.strip()))
+                    out.append(self._text("\n"))
+            return out
+        return [{"type": "segment", "index": self.index, "kind": "diagram",
+                 "value": d["title"], "display": True, "diagram": d}]
+
     def _text(self, value: str) -> dict:
         return {"type": "segment", "index": self.index, "kind": "text",
                 "value": value, "display": False}
@@ -99,6 +165,30 @@ class StepStreamParser:
     def _line(self, raw: str) -> list[dict]:
         out: list[dict] = []
         line = raw.rstrip("\r")
+
+        # the first line that is not a table row ends the table being collected
+        if (self.table_lines and not self.in_diagram and not self.in_display
+                and not TABLE_ROW_RE.match(line)):
+            out.extend(self._close_table())
+
+        # a diagram collects its edge list until @@END (or the next step, if the
+        # model forgets to close it)
+        if self.in_diagram:
+            if END_RE.match(line):
+                return out + self._close_diagram()
+            if STEP_RE.match(line) or FINAL_RE.match(line):
+                out.extend(self._close_diagram())
+            else:
+                self.diagram_lines.append(line)
+                return out
+        m = DIAGRAM_RE.match(line)
+        if m:
+            if not self.open:
+                out.extend(self._open_step("Solution"))
+            self.in_diagram = True
+            self.diagram_title = m.group(1).strip()
+            self.diagram_lines = []
+            return out
 
         # an open multi-line display block swallows everything until its closer
         if self.in_display:
@@ -114,12 +204,19 @@ class StepStreamParser:
                 self.display_acc.append(line)
             return out
 
+        if TABLE_ROW_RE.match(line):
+            if not self.open:
+                out.extend(self._open_step("Solution"))
+            self.table_lines.append(line)
+            return out
+
         m = STEP_RE.match(line)
         if m:
-            return self._open_step(m.group(1) or "Step")
+            # `out` may hold a diagram this heading just closed; keep it
+            return out + self._open_step(m.group(1) or "Step")
         m = FINAL_RE.match(line)
         if m:
-            return self._open_step(m.group(1).strip() or "Final answer", final=True)
+            return out + self._open_step(m.group(1).strip() or "Final answer", final=True)
 
         line = CLEAN_RE.sub("", line)
         if not line.strip():
@@ -183,6 +280,11 @@ def events_to_steps(events: list[dict]) -> list[dict]:
                    "final": e.get("final", False), "segments": []}
             steps.append(cur)
         elif e["type"] == "segment" and cur is not None:
-            cur["segments"].append({"kind": e["kind"], "value": e["value"],
-                                    "display": e.get("display", False)})
+            seg = {"kind": e["kind"], "value": e["value"],
+                   "display": e.get("display", False)}
+            if e.get("diagram"):
+                seg["diagram"] = e["diagram"]
+            if e.get("table"):
+                seg["table"] = e["table"]
+            cur["segments"].append(seg)
     return steps

@@ -2,6 +2,14 @@ import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+
+# Settings may live in a .env next to the project (see .env.example). Values
+# already set in the real environment win, so a shell override still works.
+try:
+    from dotenv import load_dotenv
+    load_dotenv(ROOT / ".env", override=False)
+except ImportError:  # pragma: no cover - python-dotenv ships with uvicorn[standard]
+    pass
 DATA_DIR = Path(os.getenv("INKWISE_DATA", ROOT / "data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DATA_DIR / "inkwise.db"
@@ -38,6 +46,12 @@ RAM_GUARD = os.getenv("INKWISE_RAM_GUARD", "1") == "1"
 # encoding. Set to 0 if you have enough VRAM to keep both warm.
 EXCLUSIVE_MODELS = os.getenv("INKWISE_EXCLUSIVE_MODELS", "1") == "1"
 
+# When the text model will not fit in free memory, answer with the (smaller)
+# vision model and say so, rather than failing the request.
+LOW_MEMORY_FALLBACK = os.getenv("INKWISE_LOW_MEMORY_FALLBACK", "1") == "1"
+# Start Ollama automatically if it is not running (once a minute at most).
+AUTOSTART_OLLAMA = os.getenv("INKWISE_AUTOSTART_OLLAMA", "1") == "1"
+
 # Read numeric questions twice and flag disagreement. Costs a second vision
 # pass (a few seconds) and catches misread coefficients, which are otherwise
 # invisible and invalidate the whole solution.
@@ -49,3 +63,15 @@ GEMINI_MODEL = os.getenv("INKWISE_GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 
 REQUEST_TIMEOUT = float(os.getenv("INKWISE_TIMEOUT", "900"))
+
+# --- voice (whisperflow sidecar) ---------------------------------------------
+# whisperflow runs in its own environment (speech/.venv, Python 3.11) because it
+# pins its own FastAPI and needs PyTorch; INKWISE relays audio to it.
+SPEECH_URL = os.getenv("INKWISE_SPEECH_URL", "ws://127.0.0.1:8181/ws")
+SPEECH_PYTHON = os.getenv("INKWISE_SPEECH_PYTHON",
+                          str(ROOT / "speech" / ".venv" / "Scripts" / "python.exe"))
+AUTOSTART_SPEECH = os.getenv("INKWISE_AUTOSTART_SPEECH", "1") == "1"
+
+# --- importing ---------------------------------------------------------------
+# Path to tesseract.exe. Auto-detected in the usual install locations if unset.
+TESSERACT_CMD = os.getenv("INKWISE_TESSERACT", "")

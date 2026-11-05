@@ -12,13 +12,37 @@ class AIProvider(Protocol):
         """Return {question, subject_guess, diagram, confidence, latency_s}."""
         ...
 
-    def solve(self, question: str, subject: str = "") -> AsyncIterator[str]:
+    def solve(self, question: str, subject: str = "", context: str = "",
+              session: list | None = None) -> AsyncIterator[str]:
         """Yield raw model text chunks. Parsing happens in the router."""
         ...
 
-    def explain(self, question: str, answer: str, step: str, ask: str) -> AsyncIterator[str]:
+    def explain(self, question: str, answer: str, step: str, ask: str,
+                context: str = "", history: list | None = None,
+                focus: str = "") -> AsyncIterator[str]:
+        ...
+
+    def hint(self, question: str, context: str = "") -> AsyncIterator[str]:
+        """One nudge toward the method, never the answer."""
+        ...
+
+    def notes(self, subject: str, module: str, material: str = "",
+              questions: list | None = None) -> AsyncIterator[str]:
+        """A module's study notes, in the same block protocol as answers."""
         ...
 
 
 class ProviderError(RuntimeError):
     pass
+
+
+class InsufficientMemory(ProviderError):
+    """Loading the model would starve the machine (raised before any output)."""
+
+
+class Notice(str):
+    """A message for the student, yielded in-band by a provider stream.
+
+    The router turns it into a typed "notice" event; it never reaches the
+    answer parser, so it cannot end up written into the answer.
+    """

@@ -158,6 +158,47 @@ Rules:
 - Never put LaTeX in the @@STEP title line.
 - No markdown headings, no bullets with *, no code fences.
 - Keep each step to one idea a student can follow.
+
+Diagrams: when the answer describes a structure, architecture, block diagram,
+process flow, cycle, pipeline, state transitions or hierarchy, draw it inside
+the step it belongs to, then explain each block in that step's text:
+
+@@DIAGRAM <short title>
+direction: LR
+<Block A> -> <Block B> : <what passes between them>
+<Block B> -> <Block C>
+@@END
+
+- One relationship per line, written with ->. The ": label" part is optional.
+- Block names are 1 to 4 words and are written the same way every time.
+- Use direction: LR for left-to-right flows, TB for top-to-bottom layers.
+- At most one diagram per step, and no diagrams for pure calculations.
+- Flowchart (an algorithm or procedure): begin with Start and finish with End;
+  write a decision as an id with braces, then its yes/no branches:
+    Start -> D{Is n > 1?}
+    D -> Check divisors : yes
+    D -> Print not prime : no
+- Cycle (a repeating process): list each stage once and close the loop back to
+  the first stage.
+- Labelled figure (the parts of one thing): ONE diagram that lists EVERY part,
+  placed in the first step - never one small diagram per part. The whole is on
+  the left of every line, each part on the right, what it does as the label:
+    @@DIAGRAM Parts of a CPU
+    CPU -> ALU : arithmetic and logic
+    CPU -> Control Unit : decodes instructions
+    CPU -> Registers : fastest storage
+    @@END
+  Later steps then explain the parts in words, without drawing them again.
+- Never draw a diagram that is a single arrow between two blocks; say it in words.
+
+Tables: for a comparison or a list of properties, use a table instead of prose:
+
+| Aspect | Process | Thread |
+|---|---|---|
+| Memory | Separate | Shared |
+
+- First row is the header, then a |---| row, then one row per point.
+- Keep cells short; LaTeX is allowed inside cells.
 """
 
 SOLVE_SYSTEM = (
@@ -169,7 +210,7 @@ SOLVE_SYSTEM = (
 
 SOLVE_USER = """Solve this examination question.
 
-{subject_line}Question:
+{subject_line}{context_block}{session_block}Question:
 {question}
 
 Requirements:
@@ -184,7 +225,7 @@ EXPLAIN_SYSTEM = (
     "step. Do not re-solve the whole problem.\n\n" + _BLOCK_RULES
 )
 
-EXPLAIN_USER = """Original question:
+EXPLAIN_USER = """{context_block}Original question:
 {question}
 
 The full solution that was given:
@@ -192,7 +233,7 @@ The full solution that was given:
 
 The student has selected this step:
 "{step}"
-
+{focus_block}{history_block}
 Their follow-up question about that step:
 "{ask}"
 
@@ -200,3 +241,96 @@ Answer only their follow-up, about that step. Be concrete: if they ask "why",
 give the rule or identity being used and show it. Keep it to at most three steps
 plus @@FINAL. Do not restate the whole solution.
 """
+
+HINT_SYSTEM = (
+    "You are an exam tutor helping a student who is stuck. You give exactly one "
+    "hint that gets them moving. You never give the answer, the final result, or "
+    "the full method - only the next idea they need.\n\n"
+    "Output format - follow exactly:\n\n"
+    "@@STEP Hint\n"
+    "<one or two sentences: the concept, rule or first move to try>\n\n"
+    "Rules:\n"
+    "- Any mathematics must be LaTeX: inline $...$, display $$...$$.\n"
+    "- Do not compute the result. Do not write @@FINAL.\n"
+)
+
+HINT_USER = """{context_block}The student is stuck on this question:
+{question}
+
+Give one hint that points them at the right idea without solving it.
+"""
+
+
+NOTES_SYSTEM = (
+    "You write concise, exam-oriented study notes for a university module. "
+    "Each topic is one section. In each section give the definition, the key "
+    "idea in plain words, the important formulas, and what examiners ask about "
+    "it. Draw a diagram where the topic is a structure, process or cycle, and "
+    "use a table for comparisons. End with the points to remember.\n\n" + _BLOCK_RULES
+    + "\nFor notes: each @@STEP title is the topic name. @@FINAL holds the key "
+    "points to remember, one per line, numbered 1., 2., 3.\n"
+)
+
+NOTES_USER = """Write study notes for this module.
+
+Subject: {subject}
+Module: {module}
+{material_block}{questions_block}Cover the topics a student is examined on in this module, in a sensible
+teaching order. Be accurate and compact: these are notes to revise from, not
+a textbook chapter.
+"""
+
+
+def notes_material(material: str, questions: list[str]) -> tuple[str, str]:
+    m = (material or "").strip()
+    mb = (f"Syllabus and reference material for this module (follow its scope "
+          f"and notation):\n{m[:4000]}\n\n") if m else ""
+    qs = [q.strip() for q in questions if q and q.strip()][:25]
+    qb = ("Questions students are asked on this module (the notes must equip "
+          "them to answer these):\n" + "\n".join(f"- {q[:200]}" for q in qs) + "\n\n") if qs else ""
+    return mb, qb
+
+
+def focus_block(focus: str) -> str:
+    """What the student circled inside the step, so the answer is about that."""
+    focus = (focus or "").strip()
+    if not focus:
+        return ""
+    return ("\nThe student circled this part of the step - answer about it "
+            f"specifically:\n{focus[:600]}\n")
+
+
+def history_block(turns: list[dict]) -> str:
+    """Earlier questions and answers about the same step, oldest first, so a
+    follow-up like "why not the other way?" has something to refer to."""
+    lines = []
+    for t in (turns or [])[-4:]:
+        q = str(t.get("ask") or "").strip()
+        a = str(t.get("answer") or "").strip()
+        if q and a:
+            lines.append(f"Student: {q}\nTutor: {a[:1200]}")
+    if not lines:
+        return ""
+    return ("\nWhat has already been discussed about this step (do not repeat it; "
+            "build on it):\n" + "\n\n".join(lines) + "\n")
+
+
+def session_block(turns: list[dict]) -> str:
+    """Earlier questions in this sitting, so "now integrate that" or "what if
+    n were 5?" can be understood. Ignored when the new question stands alone."""
+    lines = []
+    for t in (turns or [])[-3:]:
+        q = str(t.get("question") or "").strip()
+        a = str(t.get("answer") or "").strip()
+        if q:
+            lines.append(f"Q: {q[:400]}" + (f"\nResult: {a[:400]}" if a else ""))
+    if not lines:
+        return ""
+    return ("Earlier in this study session (use this only if the new question "
+            "refers back to it, e.g. 'that', 'it', 'the previous result'):\n"
+            + "\n\n".join(lines) + "\n\n")
+
+
+def context_block(text: str) -> str:
+    """Format retrieved material for a prompt, or nothing at all."""
+    return f"{text.strip()}\n\n" if text and text.strip() else ""

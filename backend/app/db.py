@@ -66,7 +66,85 @@ CREATE TABLE IF NOT EXISTS explanations (
 CREATE INDEX IF NOT EXISTS idx_q_module ON questions(module_id);
 CREATE INDEX IF NOT EXISTS idx_q_subject ON questions(subject_id);
 CREATE INDEX IF NOT EXISTS idx_m_subject ON modules(subject_id);
+
+-- Phase 2 --------------------------------------------------------------------
+
+-- an imported document: a question bank, syllabus or set of notes
+CREATE TABLE IF NOT EXISTS sources (
+  id TEXT PRIMARY KEY,
+  subject_id TEXT REFERENCES subjects(id) ON DELETE CASCADE,
+  filename TEXT,
+  kind TEXT NOT NULL DEFAULT 'questions',   -- questions|syllabus|notes
+  method TEXT,                               -- text|ocr|mixed
+  pages INTEGER,
+  text TEXT,
+  created_at REAL NOT NULL
+);
+
+-- one student attempt at a question: the notes that get kept and shared
+CREATE TABLE IF NOT EXISTS attempts (
+  id TEXT PRIMARY KEY,
+  question_id TEXT NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+  strokes TEXT NOT NULL DEFAULT '[]',
+  image TEXT,                                -- PNG data URL of the attempt
+  hint_json TEXT,
+  outcome TEXT,                              -- knew|hint|answer
+  created_at REAL NOT NULL,
+  updated_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_attempt_q ON attempts(question_id);
+
+-- read-only share links for a module's (or subject's) notes
+CREATE TABLE IF NOT EXISTS shares (
+  token TEXT PRIMARY KEY,
+  subject_id TEXT REFERENCES subjects(id) ON DELETE CASCADE,
+  module_id TEXT REFERENCES modules(id) ON DELETE CASCADE,
+  title TEXT,
+  created_at REAL NOT NULL,
+  revoked INTEGER NOT NULL DEFAULT 0
+);
+
+-- retrieval index over imported material (BM25, no embedding model needed,
+-- so grounding never competes with the vision/text models for GPU memory)
+-- prepared study notes: one set per module, written as structured steps
+CREATE TABLE IF NOT EXISTS study_notes (
+  id TEXT PRIMARY KEY,
+  subject_id TEXT REFERENCES subjects(id) ON DELETE CASCADE,
+  module_id TEXT UNIQUE REFERENCES modules(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  steps_json TEXT NOT NULL DEFAULT '[]',
+  created_at REAL NOT NULL,
+  updated_at REAL NOT NULL
+);
+
+-- what the student did to their notes: highlights, pen ink, and questions
+-- asked about a passage (with the explanation, so the thread survives)
+CREATE TABLE IF NOT EXISTS note_marks (
+  id TEXT PRIMARY KEY,
+  note_id TEXT NOT NULL REFERENCES study_notes(id) ON DELETE CASCADE,
+  section_index INTEGER NOT NULL,
+  kind TEXT NOT NULL,                      -- highlight|ink|question
+  quote TEXT,
+  ask TEXT,
+  data TEXT,                               -- ink strokes, or answer steps
+  created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_marks_note ON note_marks(note_id);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks USING fts5(
+  text, heading, source_id UNINDEXED, subject_id UNINDEXED,
+  module_id UNINDEXED, tokenize = 'porter unicode61'
+);
 """
+
+# columns added after the first release; applied idempotently on startup
+MIGRATIONS = [
+    ("questions", "source_id", "TEXT"),
+    ("questions", "position", "INTEGER NOT NULL DEFAULT 0"),
+    ("questions", "marks", "TEXT"),
+    # set when a subject arrived as a shared bundle, e.g. "Shared by Asha"
+    ("subjects", "origin", "TEXT"),
+]
 
 
 def conn() -> sqlite3.Connection:
@@ -82,6 +160,10 @@ def conn() -> sqlite3.Connection:
 def init():
     c = conn()
     c.executescript(SCHEMA)
+    for table, col, decl in MIGRATIONS:
+        have = {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}
+        if col not in have:
+            c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
     c.commit()
 
 

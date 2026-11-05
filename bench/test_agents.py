@@ -36,6 +36,7 @@ class FakeProvider:
         self.first = "Solve $x^2 - 5x + 6 = 0$"
         self.second = self.first
         self.fail_solve = False
+        self.last_context = ""
 
     async def health(self):
         return {"ok": True}
@@ -54,11 +55,20 @@ class FakeProvider:
         for i in range(0, len(text), 7):
             yield text[i:i + 7]
 
-    def solve(self, question, subject=""):
+    def solve(self, question, subject="", context="", session=None):
+        self.last_context = context
         return self._gen("@@STEP Factor\n$(x-2)(x-3)=0$\n@@FINAL\n$x=2,3$\n")
 
-    def explain(self, question, answer, step, ask):
+    def explain(self, question, answer, step, ask, context="", history=None,
+                focus=""):
+        self.last_context = context
         return self._gen("@@STEP Why\nProduct is zero.\n@@FINAL\nDone\n")
+
+    def hint(self, question, context=""):
+        return self._gen("@@STEP Try\nFactor it.\n@@FINAL\nTwo brackets.\n")
+
+    def notes(self, subject, module, material="", questions=None):
+        return self._gen("@@STEP Overview\nRoots.\n@@FINAL\nDone\n")
 
 
 def page_png(text=True) -> str:
@@ -102,7 +112,7 @@ def check(name, cond, detail=""):
 
 print("topology")
 t = c.get("/api/obs/agents?provider=local").json()
-check("5 active agents + 1 planned", t["counts"] == {"active": 5, "planned": 1}, t["counts"])
+check("9 active agents + 1 planned", t["counts"] == {"active": 9, "planned": 1}, t["counts"])
 check("models resolved from provider",
       {r["id"]: r["detail"] for r in t["resources"]}["vision"] == "fake-vision")
 
@@ -138,10 +148,11 @@ print("solve: Tutor streams typed steps")
 body = c.post("/api/ai/solve", json={"question": "x^2-5x+6=0", "provider": "local"}).text
 frames = [json.loads(l[5:]) for l in body.splitlines() if l.startswith("data:")]
 evs = run_events(last_trace("solve"))
-check("Tutor ran", agents_started(evs) == ["tutor"])
+check("Librarian grounds, then Tutor",
+      agents_started(evs) == ["librarian", "tutor"], agents_started(evs))
 check("UI got typed steps", any(f["type"] == "step_open" for f in frames))
 check("tutor span ok",
-      [e["data"]["status"] for e in evs if e["kind"] == "agent.end"] == ["ok"])
+      [e["data"]["status"] for e in evs if e["kind"] == "agent.end"] == ["ok", "ok"])
 
 print("solve: provider failure ends span + run as error")
 fake.fail_solve = True
@@ -150,7 +161,7 @@ fake.fail_solve = False
 evs = run_events(last_trace("solve"))
 check("client got error event", '"type": "error"' in body)
 check("tutor span error",
-      [e["data"]["status"] for e in evs if e["kind"] == "agent.end"] == ["error"])
+      [e["data"]["status"] for e in evs if e["kind"] == "agent.end"] == ["ok", "error"])
 check("run error", evs[-1]["data"]["status"] == "error")
 
 print("explain: handwritten ask delegates Explainer -> Reader")
@@ -158,7 +169,9 @@ body = c.post("/api/ai/explain", json={
     "question": "q", "answer": "a", "step": "s", "step_index": 1,
     "ask_image": page_png(), "provider": "local"}).text
 evs = run_events(last_trace("explain"))
-check("Reader then Explainer", agents_started(evs) == ["reader", "explainer"], agents_started(evs))
+check("Reader then Explainer",
+      agents_started(evs) == ["reader", "librarian", "explainer"],
+      agents_started(evs))
 check("reader called by explainer",
       [e["data"]["caller"] for e in evs if e["kind"] == "agent.start"][0] == "explainer")
 check("delegation route event",
@@ -197,9 +210,19 @@ flows = c.get("/api/obs/agents").json()["flows"]
 check("flows are structured", all(isinstance(st, dict) and "id" in st
                                   for f in flows for st in f["steps"]))
 
+print("hint: the Hint Agent answers without the Tutor")
+body = c.post("/api/ai/hint", json={"question": "x^2-5x+6=0",
+                                    "provider": "local"}).text
+evs = run_events(last_trace("hint"))
+check("Librarian then Hint Agent",
+      agents_started(evs) == ["librarian", "hinter"], agents_started(evs))
+check("hint streamed typed steps", '"type": "step_open"' in body)
+
 print("stats")
 s = c.get("/api/obs/agents").json()["stats"]
-check("per-agent counters", s["reader"]["calls"] >= 4 and s["tutor"]["errors"] == 1, s)
+check("per-agent counters",
+      s["reader"]["calls"] >= 4 and s["tutor"]["errors"] == 1
+      and s["librarian"]["calls"] >= 3, s)
 
 print("\n" + ("ALL PASSED" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)

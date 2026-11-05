@@ -14,11 +14,11 @@ import time
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .. import agents, config, db, imaging, obs, resources
 from ..ai import registry
-from ..ai.base import ProviderError
+from ..ai.base import Notice, ProviderError
 from ..ai.parser import StepStreamParser, events_to_steps
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
@@ -36,6 +36,21 @@ class SolveIn(BaseModel):
     question: str
     subject: str = ""
     question_id: str | None = None
+    subject_id: str | None = None
+    module_id: str | None = None
+    provider: str | None = None
+    consent_cloud: bool = False
+    # also look the question up on the web; sends its text to Wikipedia/DDG
+    web: bool = False
+    # earlier questions in this sitting: [{"question": ..., "answer": ...}]
+    session: list[dict] = []
+
+
+class HintIn(BaseModel):
+    question: str
+    question_id: str | None = None
+    subject_id: str | None = None
+    module_id: str | None = None
     provider: str | None = None
     consent_cloud: bool = False
 
@@ -47,6 +62,10 @@ class ExplainIn(BaseModel):
     step_index: int | None = None
     ask: str = ""
     ask_image: str | None = None
+    # earlier turns about this same step: [{"ask": ..., "answer": ...}]
+    history: list[dict] = []
+    # what the student circled inside the step (labels, formulas, words)
+    focus: str = ""
     question_id: str | None = None
     provider: str | None = None
     consent_cloud: bool = False
@@ -123,9 +142,9 @@ async def extract(body: ExtractIn):
             raise HTTPException(status_code=400, detail=f"Bad image: {e}")
 
         if info.get("cropped"):
-            o, s = info["original"], info["sent"]
-            obs.emit("step", f"Cropped page to ink: {o[0]}x{o[1]} -> {s[0]}x{s[1]}",
-                     step="crop", original=list(o), sent=list(s))
+            o, sz = info["original"], info["sent"]
+            obs.emit("step", f"Cropped page to ink: {o[0]}x{o[1]} -> {sz[0]}x{sz[1]}",
+                     step="crop", original=list(o), sent=list(sz))
         else:
             obs.emit("step", "Page sent uncropped", step="crop")
         try:
@@ -140,7 +159,8 @@ async def extract(body: ExtractIn):
     return out
 
 
-async def _stream_events(agen, *, run=None, on_done=None):
+async def _stream_events(agen, *, run=None, on_done=None, sources=None,
+                         notices=None):
     """Parse a raw model stream into typed SSE events.
 
     Events are accumulated as they are emitted so the finished answer can be
@@ -151,11 +171,21 @@ async def _stream_events(agen, *, run=None, on_done=None):
     t0 = time.perf_counter()
     first = None
     try:
-        yield _sse({"type": "start", "ts": t0, "trace": run.id if run else None})
+        yield _sse({"type": "start", "ts": t0,
+                    "trace": run.id if run else None})
+        if sources:
+            # what the answer was grounded in, so the student can check it
+            yield _sse({"type": "sources", "items": sources})
+        for note in notices or []:
+            yield _sse({"type": "notice", "message": note})
         # aclosing: a Stop from the student closes the agent cleanly, so its
         # span ends as "cancelled" instead of dangling until garbage collection
-        async with contextlib.aclosing(agen):
-            async for chunk in agen:
+        async with contextlib.aclosing(agen) as stream:
+            async for chunk in stream:
+                if isinstance(chunk, Notice):
+                    # "answering with the smaller model": shown, never parsed
+                    yield _sse({"type": "notice", "message": str(chunk)})
+                    continue
                 if first is None:
                     first = round(time.perf_counter() - t0, 2)
                     yield _sse({"type": "first_token", "ttft_s": first})
@@ -191,7 +221,6 @@ async def _stream_events(agen, *, run=None, on_done=None):
 
 @router.post("/solve")
 async def solve(body: SolveIn, request: Request):
-    """Orchestration: Tutor -> parser -> typed events (-> persist)."""
     if not body.question.strip():
         raise HTTPException(status_code=400, detail="Question is empty.")
     p = _resolve(body.provider, body.consent_cloud)
@@ -210,10 +239,28 @@ async def solve(body: SolveIn, request: Request):
         with obs.trace("solve", f"Solve “{obs.preview(body.question, 60)}”",
                        provider=_label(p)) as run:
             _consent_step(p)
+            context, used = agents.librarian(
+                body.question, body.question_id, body.subject_id, body.module_id)
+            notices = []
+            if body.web:
+                w = await agents.researcher(body.question)
+                if w["block"]:
+                    context = "\n\n".join(x for x in (context, w["block"]) if x)
+                    used = used + w["sources"]
+                elif w.get("skipped"):
+                    notices.append(f"Web search skipped: {w['skipped']}.")
+                else:
+                    notices.append(
+                        f"No web results ({w.get('error') or 'none found'}); "
+                        "answering from the local model alone.")
+            else:
+                obs.emit("step", "Web search off - staying on this machine",
+                         step="researcher", skipped=True)
             obs.emit("route", "Routing confirmed question to Tutor", to="tutor")
             async for chunk in _stream_events(
-                    agents.tutor(p, body.question, body.subject),
-                    run=run, on_done=persist):
+                    agents.tutor(p, body.question, body.subject, context,
+                                 body.session),
+                    run=run, on_done=persist, sources=used, notices=notices):
                 yield chunk
 
     return StreamingResponse(gen(), media_type="text/event-stream",
@@ -222,10 +269,7 @@ async def solve(body: SolveIn, request: Request):
 
 @router.post("/explain")
 async def explain(body: ExplainIn):
-    """Focused explanation of ONE step. Never regenerates the whole answer.
-
-    Orchestration: (Reader, if the follow-up is handwritten) -> Explainer.
-    """
+    """Focused explanation of ONE step. Never regenerates the whole answer."""
     p = _resolve(body.provider, body.consent_cloud)
     if not body.ask.strip() and not body.ask_image:
         raise HTTPException(status_code=400, detail="No follow-up question given.")
@@ -238,8 +282,8 @@ async def explain(body: ExplainIn):
             if ask:
                 obs.emit("step", "Follow-up was typed - no reading needed",
                          step="reader", skipped=True)
-            # the follow-up may itself be handwritten next to the step
-            if not ask:
+            else:
+                # the follow-up may itself be handwritten next to the step
                 try:
                     b64, _ = imaging.prepare_b64(body.ask_image)
                     ask = await agents.read_followup(p, b64)
@@ -273,12 +317,15 @@ async def explain(body: ExplainIn):
                        (json.dumps(steps), eid))
                 obs.emit("step", "Explanation saved to the question", step="save")
 
+            context, used = agents.librarian(f"{ask}\n{body.step}",
+                                             body.question_id)
             yield _sse({"type": "ask", "value": ask, "explanation_id": eid})
             obs.emit("route", "Routing step + follow-up to Explainer",
                      to="explainer")
             async for chunk in _stream_events(
-                    agents.explainer(p, body.question, body.answer, body.step, ask),
-                    run=run, on_done=persist):
+                    agents.explainer(p, body.question, body.answer, body.step,
+                                     ask, context, body.history, body.focus),
+                    run=run, on_done=persist, sources=used):
                 yield chunk
 
     return StreamingResponse(gen(), media_type="text/event-stream",
@@ -306,6 +353,34 @@ async def unload(model: str | None = None):
     if not hasattr(p, "unload"):
         raise HTTPException(400, "This provider has nothing to unload.")
     out = await p.unload(model)
-    obs.emit("model.evict", f"Student unloaded {', '.join(out['unloaded']) or 'nothing'}",
+    obs.emit("model.evict",
+             f"Student unloaded {', '.join(out['unloaded']) or 'nothing'}",
              models=out["unloaded"])
     return out
+
+
+@router.post("/hint")
+async def hint(body: HintIn):
+    """One nudge toward the method - deliberately not the answer.
+
+    The question bank asks the student to try first; this is the step between
+    "I'm stuck" and "show me the full solution".
+    """
+    if not body.question.strip():
+        raise HTTPException(status_code=400, detail="Question is empty.")
+    p = _resolve(body.provider, body.consent_cloud)
+
+    async def gen():
+        with obs.trace("hint", f"Hint for “{obs.preview(body.question, 60)}”",
+                       provider=_label(p)) as run:
+            _consent_step(p)
+            context, used = agents.librarian(
+                body.question, body.question_id, body.subject_id, body.module_id)
+            obs.emit("route", "Routing to the Hint Agent", to="hinter")
+            async for chunk in _stream_events(
+                    agents.hinter(p, body.question, context),
+                    run=run, sources=used):
+                yield chunk
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers=SSE_HEADERS)

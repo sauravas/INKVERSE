@@ -108,16 +108,40 @@ class GeminiProvider:
             acc.append(piece)
         return prompts.parse_extraction("".join(acc))
 
-    def solve(self, question: str, subject: str = "") -> AsyncIterator[str]:
+    def solve(self, question: str, subject: str = "", context: str = "",
+              session: list | None = None) -> AsyncIterator[str]:
         sl = f"Subject: {subject}\n\n" if subject else ""
         return self._stream(prompts.SOLVE_SYSTEM,
                             [{"text": prompts.SOLVE_USER.format(
-                                question=question, subject_line=sl)}],
+                                question=question, subject_line=sl,
+                                context_block=prompts.context_block(context),
+                                session_block=prompts.session_block(session or []))}],
                             max_tokens=2048)
 
-    def explain(self, question: str, answer: str, step: str, ask: str) -> AsyncIterator[str]:
+    def explain(self, question: str, answer: str, step: str, ask: str,
+                context: str = "", history: list | None = None,
+                focus: str = "") -> AsyncIterator[str]:
         return self._stream(prompts.EXPLAIN_SYSTEM,
                             [{"text": prompts.EXPLAIN_USER.format(
                                 question=question, answer=answer[:6000],
-                                step=step, ask=ask)}],
+                                step=step, ask=ask,
+                                history_block=prompts.history_block(history or []),
+                                focus_block=prompts.focus_block(focus),
+                                context_block=prompts.context_block(context))}],
                             max_tokens=900)
+
+    def notes(self, subject: str, module: str, material: str = "",
+              questions: list | None = None) -> AsyncIterator[str]:
+        mb, qb = prompts.notes_material(material, questions or [])
+        return self._stream(prompts.NOTES_SYSTEM,
+                            [{"text": prompts.NOTES_USER.format(
+                                subject=subject, module=module,
+                                material_block=mb, questions_block=qb)}],
+                            max_tokens=3000)
+
+    def hint(self, question: str, context: str = "") -> AsyncIterator[str]:
+        return self._stream(prompts.HINT_SYSTEM,
+                            [{"text": prompts.HINT_USER.format(
+                                question=question,
+                                context_block=prompts.context_block(context))}],
+                            temp=0.4, max_tokens=300)

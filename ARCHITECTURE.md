@@ -34,3 +34,34 @@ traced run and every agent call a span, emitted through `backend/app/obs.py`.
 `obs.emit()` never raises and the event buffer is bounded and in memory, so
 observability cannot slow, block or break writing or solving. Events never
 carry images, only short text previews.
+
+## Local-first, and its two deliberate exceptions
+Everything runs on this machine by default. Two features can send data out, and
+both are opt-in with an explicit prompt the first time:
+- the Gemini provider (sends the handwritten page), and
+- web search (sends the question text to Wikipedia and DuckDuckGo; never
+  handwriting or imported notes).
+Sharing notes never involves a server outside the LAN: it is a local link, or a
+file the student hands over.
+
+## Constraint 3 applies to the question bank too
+Practice outcomes are chosen by the student (knew it / needed a hint / needed the
+answer). Status and recall change by fixed rules in `routers/practice.py`. A
+friend's imported notes start with zero progress, so they cannot inflate
+readiness.
+
+## Diagrams: the model writes relationships, never drawing code
+The model emits an edge list (`@@DIAGRAM ... @@END`), which the backend parses
+into validated structure - ids, labels, shapes, edges, with caps - and infers
+the kind from the graph's shape (flowchart, cycle, labelled figure, hierarchy,
+block). React does all the drawing. Nothing that fails to parse into a sensible
+graph reaches the UI: it degrades to text. The same holds for tables.
+
+This is constraint 2 applied to pictures: a model that emitted SVG, or Mermaid
+for a library to render, would be controlling the notebook's appearance.
+
+## Voice and speech stay on the machine
+Transcription runs in a whisperflow sidecar on localhost; audio never leaves.
+Reading answers aloud uses the browser's own local voices (voices marked as
+network ones are not used). Neither is a cloud service, so neither needs the
+consent gate that Gemini and web search have.

@@ -3,15 +3,32 @@ import AgentRails from './components/AgentRails'
 import AnswerSheet, {
   RichText, stepToText, stepsFromEvents, stepsToText,
 } from './components/AnswerSheet'
+import CircleLayer, { CircleToggle } from './components/CircleLayer'
 import Dashboard from './components/Dashboard'
+import ImportView from './components/ImportView'
+import NotesStudy from './components/NotesStudy'
 import InkCanvas from './components/InkCanvas'
-import MiniPad from './components/MiniPad'
+import LinedInput from './components/LinedInput'
+import MicButton from './components/MicButton'
 import PairPanel from './components/PairPanel'
-import { api, streamEvents } from './lib/api'
+import { PenTools, ToolBtn } from './components/PenTools'
+import PracticeView from './components/PracticeView'
+import { SourcesNote, useStepQuestions } from './components/StepTools'
+import { api, streamSteps } from './lib/api'
 import { PEN_COLORS } from './lib/ink'
 import { useWorkspace } from './lib/sync'
+import { applyChoice, differences } from './lib/clarify'
+import { canSpeak, speak, speakableStep } from './lib/speak'
 
 const ROOM_KEY = 'inkwise.room'
+const WEB_KEY = 'inkwise.web'
+const SPEAK_KEY = 'inkwise.speak'
+const VIEWS = [
+  ['notebook', 'Notebook'], ['notes', 'Notes'], ['practice', 'Question bank'],
+  ['dashboard', 'Dashboard'], ['import', 'Import'],
+]
+// question-bank answer pages live in the same workspace, prefixed with q-
+const isQuestionPage = (p) => !!p?.id?.startsWith('q-')
 
 function initialRoom() {
   const q = new URLSearchParams(location.search).get('room')
@@ -39,6 +56,7 @@ export default function App() {
   const [active, setActive] = useState(0)
   const [inkCount, setInkCount] = useState(0)
   const [showPair, setShowPair] = useState(false)
+  const freePageRef = useRef(null)
 
   // --- AI state (kept entirely out of the writing path) -------------------
   const [provider, setProvider] = useState('local')
@@ -47,14 +65,43 @@ export default function App() {
   const [phase, setPhase] = useState('idle')  // idle|extracting|review|solving|done
   const [extracted, setExtracted] = useState(null)
   const [questionText, setQuestionText] = useState('')
+  // a question typed (or dictated) straight onto the page, on the lines
+  const [typed, setTyped] = useState('')
+  // what has been asked and answered in this sitting, for "now integrate that"
+  const sessionLog = useRef([])
+  const lastSteps = useRef([])
+  // voice: dictation into the question box, and answers read back
+  const dictBase = useRef(null)
+  const voiceTurn = useRef(false)
+  const stopSpeaking = useRef(() => {})
+  const [autoSolve, setAutoSolve] = useState(false)
+  const [speakAll, setSpeakAll] = useState(() => localStorage.getItem(SPEAK_KEY) === '1')
+  const toggleSpeak = () => {
+    localStorage.setItem(SPEAK_KEY, speakAll ? '0' : '1')
+    if (speakAll) stopSpeaking.current()
+    setSpeakAll(!speakAll)
+  }
   const [steps, setSteps] = useState([])
+  const [sources, setSources] = useState([])
+  const [notices, setNotices] = useState([])
+  // off by default: turning it on sends question text to Wikipedia/DuckDuckGo
+  const [web, setWeb] = useState(() => localStorage.getItem(WEB_KEY) === '1')
+  const toggleWeb = () => {
+    if (!web && !window.confirm(
+      'Web search looks your question up on Wikipedia and DuckDuckGo for '
+      + 'up-to-date facts. That sends the question text to them (never your '
+      + 'handwriting or notes). Turn it on?')) return
+    localStorage.setItem(WEB_KEY, web ? '0' : '1')
+    setWeb(!web)
+  }
   const [err, setErr] = useState(null)
   const [stats, setStats] = useState(null)
   const [questionId, setQuestionId] = useState(null)
   const [selectedStep, setSelectedStep] = useState(null)
-  const [asking, setAsking] = useState(null)
-  const [explanations, setExplanations] = useState({})
   const [toast, setToast] = useState(null)
+  const [circling, setCircling] = useState(false)
+  const [missed, setMissed] = useState(false)
+  const answerRef = useRef(null)
   const abortRef = useRef(null)
 
   useEffect(() => {
@@ -75,12 +122,30 @@ export default function App() {
     return () => clearTimeout(t)
   }, [toast])
 
-  const onPagesChange = useCallback((p, a) => { setPages(p); setActive(a) }, [])
+  const onPagesChange = useCallback((p, a) => {
+    setPages(p); setActive(a)
+    if (p[a] && !isQuestionPage(p[a])) freePageRef.current = p[a].id
+  }, [])
   const onInkChange = useCallback((n) => setInkCount(n), [])
+
+  // Leaving the question bank leaves the workspace on a question's page; the
+  // free notebook must not open onto someone's practice answer.
+  useEffect(() => {
+    if (view !== 'notebook') return
+    if (isQuestionPage(pages[active])) {
+      const target = freePageRef.current
+        || pages.find((p) => !isQuestionPage(p))?.id || 'notebook'
+      sync.send({ t: 'page_open', id: target, title: 'Notebook' })
+    }
+  }, [view, pages, active, sync])
 
   const consent = useMemo(
     () => providers.find((p) => p.name === provider)?.requires_consent,
     [providers, provider])
+
+  const ask = useStepQuestions({
+    question: questionText, steps, questionId, provider, consent,
+  })
 
   // --- solve pipeline -----------------------------------------------------
   const readPage = async () => {
@@ -88,8 +153,8 @@ export default function App() {
     const png = canvas.current?.toPng()
     if (!png) { setErr('Nothing is written on this page yet.'); return }
     setPhase('extracting')
-    setSteps([]); setStats(null); setQuestionId(null)
-    setExplanations({}); setSelectedStep(null)
+    setSteps([]); setSources([]); setStats(null); setQuestionId(null)
+    ask.setExplanations({}); setSelectedStep(null)
     try {
       if (consent && !window.confirm(
         'This sends your handwritten page to Google Gemini, off this machine. Continue?')) {
@@ -108,24 +173,42 @@ export default function App() {
     }
   }
 
-  const solve = () => {
-    const q = questionText.trim()
+  const solve = (explicit) => {
+    let q = (typeof explicit === 'string' ? explicit : questionText).trim()
     if (!q) return
-    setErr(null); setPhase('solving'); setSteps([]); setStats(null)
-    const acc = []
-    abortRef.current = streamEvents('/api/ai/solve', {
+    stopSpeaking.current()
+    setAutoSolve(false)
+    if (typeof explicit === 'string') {
+      setQuestionText(q); setQuestionId(null); setExtracted(null)
+      ask.setExplanations({}); setSelectedStep(null)
+    } else if (extracted?.diagram) {
+      // a drawing in the question is part of the question
+      q = `${q}\n\n(The student's page also shows a drawing: ${extracted.diagram})`
+    }
+    setErr(null); setPhase('solving'); setSteps([]); setSources([]); setNotices([])
+    setStats(null)
+    abortRef.current = streamSteps('/api/ai/solve', {
       question: q, subject: extracted?.subject_guess || '',
-      provider, consent_cloud: !!consent, question_id: questionId,
-    }, (ev) => {
-      if (ev.type === 'error') { setErr(ev.message); setPhase('idle'); return }
-      if (ev.type === 'done') {
-        setStats({ ttft: ev.ttft_s, total: ev.total_s }); setPhase('done'); return
-      }
-      if (ev.type === 'step_open' || ev.type === 'segment') {
-        acc.push(ev)
-        setSteps(stepsFromEvents(acc))
-      }
-    }, (e) => { setErr(e.message); setPhase('idle') })
+      provider, consent_cloud: !!consent, question_id: questionId, web,
+      session: sessionLog.current.slice(-3),
+    }, {
+      onSteps: (st) => { setSteps(st); lastSteps.current = st },
+      onSources: setSources,
+      onNotice: (n) => setNotices((x) => [...x, n]),
+      onDone: (s) => {
+        setStats(s); setPhase('done')
+        // remember the question and its result for follow-on questions
+        const final = lastSteps.current.find((x) => x.final) || lastSteps.current.at(-1)
+        sessionLog.current = [...sessionLog.current, {
+          question: q, answer: final ? stepToText(final) : '' }].slice(-6)
+        // asked by voice (or always, if chosen): read the answer back
+        if ((voiceTurn.current || speakAll) && canSpeak()) {
+          stopSpeaking.current = speak(lastSteps.current.map(speakableStep))
+        }
+        voiceTurn.current = false
+      },
+      onError: (e) => { setErr(e.message); setPhase('idle') },
+    })
   }
 
   const stop = () => { abortRef.current?.(); setPhase(steps.length ? 'done' : 'idle') }
@@ -144,55 +227,6 @@ export default function App() {
     } catch (e) { setErr(e.message) }
   }
 
-  // --- follow-up on one step ---------------------------------------------
-  const padRef = useRef(null)
-  const [askText, setAskText] = useState('')
-
-  const submitAsk = async () => {
-    const step = asking
-    if (!step) return
-    const png = padRef.current?.isEmpty() ? null : padRef.current?.toPng()
-    const text = askText.trim()
-    if (!png && !text) return
-
-    setExplanations((p) => ({
-      ...p, [step.index]: { ask: text || '(handwritten)', steps: [], streaming: true },
-    }))
-    const acc = []
-    streamEvents('/api/ai/explain', {
-      question: questionText, answer: stepsToText(steps),
-      step: stepToText(step), step_index: step.index,
-      ask: text, ask_image: png, question_id: questionId,
-      provider, consent_cloud: !!consent,
-    }, (ev) => {
-      if (ev.type === 'ask') {
-        setExplanations((p) => ({
-          ...p, [step.index]: { ...p[step.index], ask: ev.value } }))
-        return
-      }
-      if (ev.type === 'error') {
-        setExplanations((p) => ({
-          ...p, [step.index]: { ...p[step.index], streaming: false, error: ev.message } }))
-        return
-      }
-      if (ev.type === 'done') {
-        setExplanations((p) => ({
-          ...p, [step.index]: { ...p[step.index], streaming: false } }))
-        return
-      }
-      if (ev.type === 'step_open' || ev.type === 'segment') {
-        acc.push(ev)
-        const built = stepsFromEvents(acc)
-        setExplanations((p) => ({ ...p, [step.index]: { ...p[step.index], steps: built } }))
-      }
-    }, (e) => {
-      setExplanations((p) => ({
-        ...p, [step.index]: { ...p[step.index], streaming: false, error: e.message } }))
-    })
-
-    setAsking(null); setAskText(''); padRef.current?.clear()
-  }
-
   // bring the answer into view as soon as the pen starts
   useEffect(() => {
     if (phase === 'solving' && sheetRef.current) {
@@ -203,6 +237,7 @@ export default function App() {
 
   // --- keyboard -----------------------------------------------------------
   useEffect(() => {
+    if (view !== 'notebook') return undefined
     const onKey = (e) => {
       if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return
       const mod = e.ctrlKey || e.metaKey
@@ -212,7 +247,7 @@ export default function App() {
                  || (e.key.toLowerCase() === 'z' && e.shiftKey))) {
         e.preventDefault(); canvas.current?.redo()
       } else if (mod && e.key === 'Enter') {
-        e.preventDefault(); if (phase === 'idle' || phase === 'done') readPage()
+        e.preventDefault(); if (phase === 'idle' || phase === 'done') solveOrRead()
       } else if (e.key === 'e') setTool('eraser')
       else if (e.key === 'p') setTool('pen')
       else if (e.key === 'h') setTool('highlighter')
@@ -222,6 +257,28 @@ export default function App() {
   })
 
   const busy = phase === 'extracting' || phase === 'solving'
+  const ai = { provider, consent, web }
+  // Solve answers the typed question if there is one, else reads the page
+  const solveOrRead = () => (typed.trim() ? solve(typed) : readPage())
+
+  // spoken words go into the question box as they are recognised
+  const onDictText = (committed, partial) => {
+    if (dictBase.current === null) dictBase.current = typed ? `${typed.trim()} ` : ''
+    setAutoSolve(false)
+    setTyped(`${dictBase.current}${committed}${partial ? ` ${partial}` : ''}`.trimStart())
+  }
+  const onDictDone = (text) => {
+    const full = `${dictBase.current ?? ''}${text}`.trim()
+    dictBase.current = null
+    setTyped(full)
+    voiceTurn.current = true
+    setAutoSolve(true)               // solve shortly, unless the student edits it
+  }
+  useEffect(() => {
+    if (!autoSolve || !typed.trim() || busy) return undefined
+    const t = setTimeout(() => solve(typed), 2000)
+    return () => clearTimeout(t)
+  }, [autoSolve, typed, busy])      // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="flex h-full flex-col">
@@ -230,26 +287,42 @@ export default function App() {
         sync={sync} onPair={() => setShowPair(true)}
         provider={provider} setProvider={setProvider} providers={providers}
         health={health} onRefreshHealth={refreshHealth}
+        web={web} onToggleWeb={toggleWeb}
+        speakAll={speakAll} onToggleSpeak={toggleSpeak}
       />
 
-      {view === 'dashboard' ? (
+      {view === 'dashboard' && (
         <Dashboard onOpenQuestion={(q) => {
           setQuestionText(q.text); setQuestionId(q.id)
           try {
             const s = q.answer_json ? JSON.parse(q.answer_json) : []
             setSteps(s); setStats(null); setPhase(s.length ? 'done' : 'review')
           } catch { setSteps([]); setPhase('review') }
-          setExplanations({}); setSelectedStep(null)
+          setSources([]); ask.setExplanations({}); setSelectedStep(null)
           setView('notebook')
         }} />
-      ) : (
+      )}
+
+      {view === 'notes' && <NotesStudy ai={ai} />}
+
+      {view === 'import' && (
+        <ImportView onPractise={() => setView('practice')} />
+      )}
+
+      {view === 'practice' && (
+        <PracticeView sync={sync} ai={ai} tool={tool} setTool={setTool}
+                      color={color} setColor={setColor} size={size} setSize={setSize}
+                      onImport={() => setView('import')} />
+      )}
+
+      {view === 'notebook' && (
         <div className="flex min-h-0 flex-1 flex-col">
           <Toolbar
             tool={tool} setTool={setTool} color={color} setColor={setColor}
             size={size} setSize={setSize} canvas={canvas}
             pages={pages} active={active} inkCount={inkCount}
-            busy={busy} phase={phase} stats={stats}
-            onSolve={readPage} onStop={stop}
+            busy={busy} onSolve={solveOrRead} onStop={stop}
+            canSolve={inkCount > 0 || typed.trim().length > 0}
             canSave={steps.length > 0 && !questionId}
             onSaveStudy={saveToStudy}
             onSaveNotebook={async () => {
@@ -288,12 +361,23 @@ export default function App() {
                   showRule={false} fitWidth
                   onPagesChange={onPagesChange} onInkChange={onInkChange}
                 />
+                <LinedInput value={typed} className="px-5"
+                            onChange={(v) => { setTyped(v); setAutoSolve(false) }}
+                            placeholder="…or type or say your question, and press Enter"
+                            onSubmit={() => solve(typed)} disabled={busy}>
+                  <MicButton onText={onDictText} onDone={onDictDone}
+                             title="Ask by voice — stop talking and it solves" />
+                </LinedInput>
+                {autoSolve && typed.trim() && !busy && (
+                  <p className="lined-row px-5 text-xs text-ink-soft">
+                    solving in 2 seconds… change the text to stop it
+                  </p>
+                )}
 
                 {(steps.length > 0 || busy) && (
-                  <div data-answer-start className="px-5 pb-10 pt-2">
-                    <div className="mb-2 flex items-center gap-2 border-t border-dashed
-                                    border-rule pt-3">
-                      <span className="hand text-[1.6rem] text-emerald-800">Answer</span>
+                  <div data-answer-start className="px-5 pb-[var(--rule)]">
+                    <div className="lined-row flex items-baseline gap-2">
+                      <span className="hand lined-text text-[1.6rem] text-emerald-800">Answer</span>
                       {stats && (
                         <span className="text-[11px] text-ink-soft/70">
                           first ink {stats.ttft}s · {stats.total}s
@@ -304,41 +388,40 @@ export default function App() {
                           reading your handwriting…
                         </span>
                       )}
+                      {steps.length > 0 && (
+                        <CircleToggle on={circling} missed={missed}
+                                      onChange={(v) => { setCircling(v); setMissed(false) }} />
+                      )}
                     </div>
+                    <SourcesNote items={sources} notices={notices} />
 
+                    <div ref={answerRef} className="relative">
+                    <CircleLayer active={circling} resetKey={questionText}
+                                 onCircle={(poly) => {
+                                   const ok = ask.circled(answerRef.current, poly)
+                                   setMissed(!ok)
+                                   if (ok) setCircling(false)
+                                 }} />
                     <AnswerSheet
                       steps={steps}
                       streaming={phase === 'solving'}
                       instant={phase === 'done' && !stats}
                       selectedStep={selectedStep}
                       onSelectStep={setSelectedStep}
-                      onAskStep={(s) => { setSelectedStep(s); setAsking(s) }}
+                      onAskStep={(s) => { setSelectedStep(s); ask.setAsking(s) }}
                       emptyHint=" "
-                      afterStep={(s) => (
-                        <>
-                          {explanations[s.index] && (
-                            <MarginNote index={s.index} ex={explanations[s.index]} />
-                          )}
-                          {asking?.index === s.index && (
-                            <AskInline
-                              step={s} padRef={padRef} text={askText}
-                              setText={setAskText} onSubmit={submitAsk}
-                              onCancel={() => {
-                                setAsking(null); setAskText(''); padRef.current?.clear()
-                              }}
-                            />
-                          )}
-                        </>
-                      )}
+                      afterStep={ask.afterStep}
+                      onAskBlock={ask.askBlock}
                     />
+                    </div>
                   </div>
                 )}
 
                 {steps.length === 0 && !busy && (
-                  <p className="hand px-5 pb-8 pt-3 text-[1.35rem] text-ink-soft/45">
+                  <p className="hand lined-text px-5 pb-[var(--rule)] text-[1.35rem] text-ink-soft/45">
                     {inkCount > 0
                       ? 'Press Solve — the answer will be written here.'
-                      : 'Write a question above, then press Solve.'}
+                      : 'Write or type a question above, then press Solve.'}
                   </p>
                 )}
               </div>
@@ -367,7 +450,7 @@ export default function App() {
 /* -------------------------------------------------------------------- bars */
 
 function TopBar({ view, setView, sync, onPair, provider, setProvider, providers,
-                  health, onRefreshHealth }) {
+                  health, onRefreshHealth, web, onToggleWeb, speakAll, onToggleSpeak }) {
   const phones = sync.peers.filter((p) => p.role === 'phone').length
   const dot = sync.status === 'live' ? '#0ca30c'
     : sync.status === 'offline' ? '#d03b3b' : '#fab219'
@@ -377,11 +460,11 @@ function TopBar({ view, setView, sync, onPair, provider, setProvider, providers,
       <span className="hand text-2xl tracking-wide">INKWISE</span>
 
       <nav className="ml-3 flex gap-1 rounded-lg bg-black/5 p-0.5 text-sm">
-        {['notebook', 'dashboard'].map((v) => (
+        {VIEWS.map(([v, label]) => (
           <button key={v} onClick={() => setView(v)}
-                  className={`rounded-md px-3 py-1 capitalize ${
+                  className={`whitespace-nowrap rounded-md px-3 py-1 ${
                     view === v ? 'bg-white shadow-sm' : 'text-ink-soft'}`}>
-            {v}
+            {label}
           </button>
         ))}
       </nav>
@@ -396,6 +479,23 @@ function TopBar({ view, setView, sync, onPair, provider, setProvider, providers,
             </option>
           ))}
         </select>
+        <button onClick={onToggleWeb}
+                title={web ? 'Web search on: questions are also looked up on Wikipedia '
+                  + 'and DuckDuckGo' : 'Web search off: answers use only this machine'}
+                className={`rounded-lg px-2 py-1 ${web
+                  ? 'bg-sky-50 text-sky-800 ring-1 ring-sky-300' : 'text-ink-soft hover:bg-black/5'}`}>
+          🌐 Web {web ? 'on' : 'off'}
+        </button>
+        {canSpeak() && (
+          <button onClick={onToggleSpeak}
+                  title={speakAll ? 'Every answer is read aloud (on this laptop\'s own voice)'
+                    : 'Answers are read aloud only when you ask by voice'}
+                  className={`rounded-lg px-2 py-1 ${speakAll
+                    ? 'bg-emerald-50 text-emerald-800 ring-1 ring-emerald-300'
+                    : 'text-ink-soft hover:bg-black/5'}`}>
+            {speakAll ? '🔊 Read aloud' : '🔈 Voice replies'}
+          </button>
+        )}
         <span className="inline-flex items-center gap-1.5">
           <span className="inline-block h-2 w-2 rounded-full" style={{ background: dot }} />
           {sync.status}{sync.latency != null && sync.status === 'live'
@@ -446,44 +546,20 @@ function ModelPill({ health, onRefresh }) {
 }
 
 function Toolbar({ tool, setTool, color, setColor, size, setSize, canvas,
-                   pages, active, inkCount, busy, phase, stats, onSolve, onStop,
+                   pages, active, inkCount, busy, onSolve, onStop, canSolve,
                    canSave, onSaveStudy, onSaveNotebook }) {
-  const Btn = ({ on, children, ...p }) => (
-    <button {...p}
-      className={`shrink-0 whitespace-nowrap rounded-md px-2.5 py-1.5 text-sm ${
-        on ? 'bg-ink text-white' : 'hover:bg-black/5'}`}>{children}</button>
-  )
+  const freePages = pages.filter((p) => !isQuestionPage(p))
+  const pos = freePages.findIndex((p) => p.id === pages[active]?.id)
   return (
     <div className="scroll-thin flex items-center gap-1 overflow-x-auto border-b
                     border-black/10 bg-[#fbf9f3] px-3 py-1.5">
-      <Btn on={tool === 'pen'} onClick={() => setTool('pen')} title="Pen (p)">✒︎ Pen</Btn>
-      <Btn on={tool === 'highlighter'} onClick={() => setTool('highlighter')}
-           title="Highlighter (h)">▭ Mark</Btn>
-      <Btn on={tool === 'eraser'} onClick={() => setTool('eraser')}
-           title="Eraser (e)">⌫ Erase</Btn>
-
-      <span className="mx-1 h-5 w-px shrink-0 bg-black/10" />
-      {PEN_COLORS.map((c) => (
-        <button key={c} onClick={() => { setColor(c); setTool('pen') }} title={c}
-                className={`h-5 w-5 shrink-0 rounded-full ring-offset-1 ${
-                  color === c ? 'ring-2 ring-ink' : 'ring-1 ring-black/15'}`}
-                style={{ background: c }} />
-      ))}
-      <input type="range" min="1" max="6" step="0.2" value={size}
-             onChange={(e) => setSize(parseFloat(e.target.value))}
-             className="mx-2 w-20 shrink-0" title="Pen width" />
-
-      <span className="mx-1 h-5 w-px shrink-0 bg-black/10" />
-      <Btn onClick={() => canvas.current?.undo()} title="Undo (Ctrl+Z)">↶</Btn>
-      <Btn onClick={() => canvas.current?.redo()} title="Redo (Ctrl+Y)">↷</Btn>
-      <Btn onClick={() => { if (confirm('Clear this page?')) canvas.current?.clear() }}>
-        Clear
-      </Btn>
-      <Btn onClick={() => canvas.current?.addPage()}>+ Page</Btn>
+      <PenTools tool={tool} setTool={setTool} color={color} setColor={setColor}
+                size={size} setSize={setSize} canvas={canvas} />
+      <ToolBtn onClick={() => canvas.current?.addPage()}>+ Page</ToolBtn>
       <span className="shrink-0 whitespace-nowrap px-1 text-xs text-ink-soft">
-        {active + 1}/{pages.length || 1} · {inkCount} strokes
+        {Math.max(1, pos + 1)}/{freePages.length || 1} · {inkCount} strokes
       </span>
-      <Btn onClick={onSaveNotebook} title="Save notebook to disk">💾</Btn>
+      <ToolBtn onClick={onSaveNotebook} title="Save notebook to disk">💾</ToolBtn>
 
       <span className="ml-auto flex shrink-0 items-center gap-2 pl-2">
         {canSave && (
@@ -499,7 +575,7 @@ function Toolbar({ tool, setTool, color, setColor, size, setSize, canvas,
             Stop
           </button>
         ) : (
-          <button onClick={onSolve} disabled={!inkCount}
+          <button onClick={onSolve} disabled={!canSolve}
                   className="shrink-0 whitespace-nowrap rounded-lg bg-accent px-3 py-1.5
                              text-sm text-white disabled:opacity-40">
             Solve ⌘↵
@@ -511,15 +587,17 @@ function Toolbar({ tool, setTool, color, setColor, size, setSize, canvas,
 }
 
 function PageStrip({ pages, active, canvas }) {
-  if (pages.length <= 1) return null
+  // question-bank pages are reached from the question bank, not listed here
+  const free = pages.map((p, i) => ({ p, i })).filter(({ p }) => !isQuestionPage(p))
+  if (free.length <= 1) return null
   return (
     <div className="flex items-center gap-1.5 overflow-x-auto border-t border-black/10
                     bg-[#fbf9f3] px-3 py-1.5">
-      {pages.map((p, i) => (
+      {free.map(({ p, i }, n) => (
         <button key={p.id} onClick={() => canvas.current?.selectPage(i)}
                 className={`shrink-0 rounded px-2 py-1 text-xs ${
                   i === active ? 'bg-ink text-white' : 'bg-black/5 hover:bg-black/10'}`}>
-          {i + 1}
+          {n + 1}
         </button>
       ))}
       <button onClick={() => canvas.current?.deletePage(active)}
@@ -536,6 +614,20 @@ function ReviewBar({ extracted, value, onChange, onSolve, onReread, onCancel }) 
   const conf = extracted?.confidence ?? 0
   const low = conf < 0.6
   const alt = extracted?.alternative
+  // where the two readings disagree, as specific questions for the student
+  const diffs = useMemo(
+    () => (alt ? differences(extracted.question, alt) : []), [alt, extracted?.question])
+  const [picked, setPicked] = useState({})
+  const choose = (i, useTheirs) => {
+    const next = { ...picked, [i]: useTheirs }
+    setPicked(next)
+    // re-apply every choice to the first reading, right to left so the token
+    // positions of earlier differences stay valid
+    let text = extracted.question
+    diffs.map((d, j) => [d, j]).sort((a, b) => b[0].at[0] - a[0].at[0])
+      .forEach(([d, j]) => { if (next[j]) text = applyChoice(text, d, true) })
+    onChange(text)
+  }
   return (
     <div className="border-b border-black/10 bg-amber-50/70 px-4 py-3">
       <div className="mx-auto max-w-3xl">
@@ -560,25 +652,45 @@ function ReviewBar({ extracted, value, onChange, onSolve, onReread, onCancel }) 
           </button>
         </div>
 
-        {alt && (
-          // the two readings disagreed, so the student picks rather than us
-          <div className="mb-2 rounded-lg border border-amber-400 bg-white/70 px-3 py-2">
+        {diffs.length > 0 && (
+          // ask about the exact spot, not "here are two sentences, compare them"
+          <div className="mb-2 space-y-1.5 rounded-lg bg-white/70 px-3 py-2 ring-1 ring-amber-400">
             <div className="text-[11px] font-medium text-amber-900">
-              The two readings disagreed — check the numbers:
+              I'm not sure what you wrote {diffs.length === 1 ? 'here' : 'in these places'}:
             </div>
-            <button type="button" onClick={() => onChange(alt)}
-                    className="mt-1 block w-full rounded border border-amber-300
-                               bg-amber-50 px-2 py-1 text-left font-mono text-[12px]
-                               hover:bg-amber-100">
-              {alt}
-              <span className="ml-2 text-[10px] text-amber-700">use this instead</span>
-            </button>
+            {diffs.map((d, i) => (
+              <div key={i} className="flex flex-wrap items-center gap-1.5 text-sm">
+                {d.before && <span className="text-ink-soft">…{d.before}</span>}
+                {[[false, d.mine], [true, d.theirs]].map(([theirs, txt]) => (
+                  <button key={String(theirs)} type="button" onClick={() => choose(i, theirs)}
+                          className={`rounded-md px-2 py-0.5 ring-1 ${
+                            (picked[i] ?? false) === theirs
+                              ? 'bg-amber-200 ring-amber-500' : 'bg-white ring-amber-300 hover:bg-amber-50'}`}>
+                    {txt ? <RichText text={txt} className="hand text-[1.15rem]" />
+                      : <span className="text-xs text-ink-soft">(nothing)</span>}
+                  </button>
+                ))}
+                <span className="text-ink-soft">?</span>
+              </div>
+            ))}
           </div>
         )}
+        {!diffs.length && low && (
+          <p className="mb-2 text-[12px] text-amber-900">
+            Parts of this were hard to read. Fix anything wrong below, or write it
+            again more clearly and press Read again.
+          </p>
+        )}
 
-        <textarea value={value} onChange={(e) => onChange(e.target.value)} rows={2}
-                  className="w-full resize-y rounded-lg border border-amber-300 bg-white
-                             px-3 py-2 font-mono text-[13px] leading-5" />
+        <div className="rounded-lg bg-white/70 px-1 ring-1 ring-amber-300">
+          <LinedInput value={value} onChange={onChange} onSubmit={onSolve} minLines={2} />
+        </div>
+        {/\$|\\\(/.test(value) && (
+          // how the maths will actually read, so a wrong exponent is visible
+          <p className="mt-1 text-[11px] text-amber-900/80">
+            reads as: <RichText text={value} className="hand text-[1.15rem] text-ink" />
+          </p>
+        )}
         <div className="mt-2 flex gap-2">
           <button onClick={onSolve}
                   className="rounded-lg bg-accent px-3 py-1.5 text-sm text-white">
@@ -589,49 +701,6 @@ function ReviewBar({ extracted, value, onChange, onSolve, onReread, onCancel }) 
             Read again
           </button>
         </div>
-      </div>
-    </div>
-  )
-}
-
-function MarginNote({ index, ex }) {
-  return (
-    <div className="my-2 ml-6 rounded-lg border-l-4 border-amber-400 bg-amber-50/60
-                    px-4 py-3">
-      <div className="mb-1 text-[11px] font-medium uppercase tracking-wide
-                      text-amber-900/80">
-        About step {index} — you asked
-      </div>
-      <RichText text={ex.ask}
-                className="hand mb-2 block text-[1.2rem] leading-6 text-amber-950" />
-      {ex.error
-        ? <p className="text-sm text-red-700">{ex.error}</p>
-        : <AnswerSheet steps={ex.steps} streaming={ex.streaming} dense />}
-    </div>
-  )
-}
-
-function AskInline({ step, padRef, text, setText, onSubmit, onCancel }) {
-  return (
-    <div className="my-2 ml-6 rounded-lg border border-amber-300 bg-amber-50/70 px-4 py-3">
-      <div className="mb-2 flex items-center gap-2">
-        <span className="text-xs font-medium">
-          Ask about {step.final ? 'the final answer' : `step ${step.index}`}
-        </span>
-        <button onClick={onCancel}
-                className="ml-auto text-xs text-ink-soft hover:underline">cancel</button>
-      </div>
-      <MiniPad ref={padRef} height={88}
-               placeholder="write your question here — or type it below" />
-      <div className="mt-2 flex gap-2">
-        <input value={text} onChange={(e) => setText(e.target.value)}
-               onKeyDown={(e) => { if (e.key === 'Enter') onSubmit() }}
-               placeholder="…or type it"
-               className="flex-1 rounded-lg border border-black/15 px-3 py-1.5 text-sm" />
-        <button onClick={onSubmit}
-                className="rounded-lg bg-accent px-3 py-1.5 text-sm text-white">
-          Explain
-        </button>
       </div>
     </div>
   )

@@ -22,3 +22,5 @@ bench/shot-*.png
 
 # presentation decks (kept outside version control)
 *.pptx
+# whisperflow sidecar environment (PyTorch etc.; recreated by start.ps1)
+speech/.venv/

@@ -63,6 +63,84 @@ export const api = {
   recall: (id, correct) => post(`/api/study/questions/${id}/recall`, { correct }),
 
   dashboard: (sid) => get(`/api/study/dashboard${sid ? `?subject_id=${sid}` : ''}`),
+
+  // --- importing -----------------------------------------------------------
+  importStatus: () => get('/api/import/status'),
+  importExtract: async (file, kind = 'auto') => {
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('kind', kind)
+    // no JSON content-type: the browser sets the multipart boundary itself
+    const r = await fetch('/api/import/extract', { method: 'POST', body: fd })
+    const body = await r.json().catch(() => ({}))
+    if (!r.ok) throw new Error(body.detail || `${r.status} ${r.statusText}`)
+    return body
+  },
+  importCommit: (b) => post('/api/import/commit', b),
+  sources: (sid) => get(`/api/import/sources${sid ? `?subject_id=${sid}` : ''}`),
+  deleteSource: (id) => del(`/api/import/sources/${id}`),
+
+  // --- question-bank practice ----------------------------------------------
+  practiceModule: (mid) => get(`/api/practice/module/${mid}`),
+  practiceQuestion: (qid) => get(`/api/practice/question/${qid}`),
+  saveAttempt: (qid, b) => jfetch(`/api/practice/question/${qid}/attempt`,
+    { method: 'PUT', body: JSON.stringify(b) }),
+  finishQuestion: (qid, outcome) =>
+    post(`/api/practice/question/${qid}/finish`, { outcome }),
+
+  // --- notes and sharing ---------------------------------------------------
+  notes: (q) => get(`/api/notes?${new URLSearchParams(q)}`),
+  share: (b) => post('/api/share', b),
+  shares: () => get('/api/shares'),
+  openShare: (token) => get(`/api/share/${token}`),
+  revokeShare: (token) => del(`/api/share/${token}`),
+  exportUrl: (q) => `/api/notes/export?${new URLSearchParams(q)}`,
+  importBundle: (bundle, sharedBy) =>
+    post('/api/notes/import', { bundle, shared_by: sharedBy || null }),
+
+  // --- prepared study notes ------------------------------------------------
+  noteModules: () => get('/api/study-notes/modules'),
+  studyNotes: (mid) => get(`/api/study-notes/${mid}`),
+  addMark: (noteId, b) => post(`/api/study-notes/notes/${noteId}/marks`, b),
+  updateMark: (id, data) => patch(`/api/study-notes/marks/${id}`, { data }),
+  deleteMark: (id) => del(`/api/study-notes/marks/${id}`),
+}
+
+/**
+ * Stream a typed-event endpoint and fold it into steps as it arrives.
+ * Handlers: onSteps(steps), onSources(items), onNotice(text), onDone(stats),
+ * onError(err).
+ * Returns an abort function.
+ */
+export function streamSteps(url, body, { onSteps, onSources, onNotice, onDone, onError, onEvent } = {}) {
+  const acc = []
+  return streamEvents(url, body, (ev) => {
+    onEvent?.(ev)
+    if (ev.type === 'sources') { onSources?.(ev.items || []); return }
+    if (ev.type === 'notice') { onNotice?.(ev.message); return }
+    if (ev.type === 'error') { onError?.(new Error(ev.message)); return }
+    if (ev.type === 'done') { onDone?.({ ttft: ev.ttft_s, total: ev.total_s }); return }
+    if (ev.type === 'step_open' || ev.type === 'segment') {
+      acc.push(ev)
+      onSteps?.(foldSteps(acc))
+    }
+  }, (e) => onError?.(e))
+}
+
+function foldSteps(events) {
+  const steps = []
+  let cur = null
+  for (const e of events) {
+    if (e.type === 'step_open') {
+      cur = { index: e.index, title: e.title, final: e.final, segments: [] }
+      steps.push(cur)
+    } else if (e.type === 'segment' && cur) {
+      cur.segments.push({ kind: e.kind, value: e.value, display: e.display,
+                          ...(e.diagram ? { diagram: e.diagram } : {}),
+                          ...(e.table ? { table: e.table } : {}) })
+    }
+  }
+  return steps
 }
 
 /**

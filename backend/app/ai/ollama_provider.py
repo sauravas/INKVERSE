@@ -12,14 +12,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import shutil
+import subprocess
 import time
+from pathlib import Path
 from typing import AsyncIterator
 
 import httpx
 
 from .. import config, obs, resources
 from . import http, prompts
-from .base import ProviderError
+from .base import InsufficientMemory, Notice, ProviderError
 
 
 class OllamaProvider:
@@ -106,6 +110,60 @@ class OllamaProvider:
         return {"vision": self.vision_model, "text": self.text_model,
                 "staged": self.staged}
 
+    _start_lock = asyncio.Lock()
+    _last_start = 0.0
+
+    async def _alive(self) -> bool:
+        try:
+            async with httpx.AsyncClient(timeout=3) as c:
+                return (await c.get(f"{self.url}/api/version")).status_code == 200
+        except httpx.RequestError:
+            return False
+
+    async def _ensure_server(self) -> bool:
+        """Start Ollama if it is not running, and wait until it answers.
+
+        On this laptop the Ollama server has been seen to exit mid-session.
+        Rather than fail every request until someone restarts it by hand, start
+        it again: the desktop app where installed (it keeps a server log), else
+        `ollama serve`. At most once a minute, and only on this machine.
+        """
+        if await self._alive():
+            return True
+        if not config.AUTOSTART_OLLAMA or not self.url.startswith(
+                ("http://127.0.0.1", "http://localhost")):
+            return False
+        async with OllamaProvider._start_lock:
+            if await self._alive():
+                return True
+            if time.monotonic() - OllamaProvider._last_start > 60:
+                OllamaProvider._last_start = time.monotonic()
+                exe = shutil.which("ollama")
+                if not exe:
+                    return False
+                app = Path(exe).with_name("ollama app.exe")
+                cmd = [str(app)] if app.is_file() else [exe, "serve"]
+                flags = 0
+                if os.name == "nt":
+                    flags = (subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+                             | subprocess.CREATE_NO_WINDOW)
+                subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, creationflags=flags,
+                                 close_fds=True)
+            for _ in range(60):                      # up to ~30 s to come up
+                await asyncio.sleep(0.5)
+                if await self._alive():
+                    self._sizes = {}                 # sizes may have changed
+                    return True
+        return False
+
+    async def _wait_gone(self, model: str, timeout: float = 6.0):
+        """After an unload, wait until the model has really left memory."""
+        end = time.monotonic() + timeout
+        while time.monotonic() < end and model in await self._loaded():
+            await asyncio.sleep(0.25)
+        await asyncio.sleep(0.4)          # give Windows a moment to reclaim pages
+
     async def _exclusive(self, model: str):
         """Keep only one stage resident at a time.
 
@@ -124,11 +182,17 @@ class OllamaProvider:
                      f"Evicting {other} so {model} can load (one stage at a time)",
                      model=other, for_model=model)
             await self.unload(other)
+            # measuring free memory before the eviction lands would make the
+            # RAM guard refuse a model that actually fits
+            await self._wait_gone(other)
 
     async def _guard(self, model: str):
         """Refuse to load a model that would starve the machine."""
         if not config.RAM_GUARD:
             return
+        if not await self._ensure_server():
+            # with Ollama down, a memory verdict would be about the wrong thing
+            raise ProviderError(resources.serve_hint())
         if model in await self._loaded():
             return                       # already resident, no new allocation
         if not self._sizes:
@@ -142,7 +206,7 @@ class OllamaProvider:
         ok, msg = resources.check(size, config.MIN_FREE_RAM_GB)
         if not ok:
             obs.emit("guard.block", msg, level="error", model=model)
-            raise ProviderError(msg)
+            raise InsufficientMemory(msg)
 
     async def unload(self, model: str | None = None) -> dict:
         """Evict a model from memory immediately."""
@@ -231,6 +295,8 @@ class OllamaProvider:
                     raise ProviderError(
                         resources.serve_hint() if resources.ollama_installed()
                         else f"Cannot reach Ollama at {self.url}: {e}") from e
+                if isinstance(e, httpx.ConnectError) and await self._ensure_server():
+                    continue                  # the server is back: retry at once
 
             # The runner died before emitting anything. On this hardware
             # (shared-memory iGPU) the crash is often a transient driver fault
@@ -255,16 +321,49 @@ class OllamaProvider:
             "to the \"heavy\" provider or restart `ollama serve`.")
 
     # -- stage 1: vision ---------------------------------------------------
+    async def _complete(self, model: str, messages, *, attempts=5,
+                        **kw) -> str:
+        """Buffered request that restarts from scratch on a runner crash.
+
+        _stream_chat cannot retry once it has yielded tokens, because for
+        solve/explain those tokens are already on the student's screen. A
+        buffered caller has shown nothing yet, so a crash part-way through the
+        reply is safe to retry - and on this hardware that is the common case:
+        the vision runner often dies after emitting a few tokens.
+        """
+        last = ""
+        for attempt in range(attempts):
+            acc: list[str] = []
+            try:
+                async for piece in self._stream_chat(model, messages,
+                                                     attempts=1, **kw):
+                    acc.append(piece)
+                return "".join(acc)
+            except ProviderError as e:
+                last = str(e)
+                if not self._is_runner_crash(last) or attempt == attempts - 1:
+                    break
+            await asyncio.sleep(2.5 * (attempt + 1))
+            try:
+                await self.unload(model)
+            except Exception:
+                pass
+        if self._is_runner_crash(last):
+            raise ProviderError(
+                f"{model} crashed {attempts} times in a row on this machine's "
+                "GPU driver and could not recover. This is usually transient - "
+                "wait a few seconds and press Solve again. If it keeps "
+                "happening, restart `ollama serve`.")
+        raise ProviderError(last)
+
     async def _read_once(self, image_b64: str, user: str, temp: float) -> dict:
-        acc = []
-        async for piece in self._stream_chat(
+        raw = await self._complete(
             self.vision_model,
             [{"role": "system", "content": prompts.EXTRACT_SYSTEM},
              {"role": "user", "content": user, "images": [image_b64]}],
             num_predict=600, temp=temp,
-        ):
-            acc.append(piece)
-        return prompts.parse_extraction("".join(acc))
+        )
+        return prompts.parse_extraction(raw)
 
     async def extract(self, image_b64: str, hint: str = "",
                       verify: bool | None = None) -> dict:
@@ -295,20 +394,63 @@ class OllamaProvider:
         return await self._read_once(image_b64, prompts.VERIFY_USER, temp=0.0)
 
     # -- stage 2: reasoning ------------------------------------------------
-    def solve(self, question: str, subject: str = "") -> AsyncIterator[str]:
+    async def _text(self, messages, **kw) -> AsyncIterator[str]:
+        """Run a text stage; if the text model will not fit, use the small one.
+
+        A shorter answer from the small model is more use to a student than an
+        error. The switch happens before any output (the RAM guard runs first),
+        and the student is told which model answered.
+        """
+        try:
+            async for piece in self._stream_chat(self.text_model, messages, **kw):
+                yield piece
+            return
+        except InsufficientMemory as e:
+            fallback = self.vision_model
+            if not (config.LOW_MEMORY_FALLBACK and self.staged and fallback != self.text_model):
+                raise
+            why = str(e).split(". ")[0]
+        yield Notice(f"{why}. Answering with the smaller {fallback} model instead, so "
+                     "this may be less thorough - close some apps and ask again for "
+                     "the full answer.")
+        async for piece in self._stream_chat(fallback, messages, **kw):
+            yield piece
+
+    def solve(self, question: str, subject: str = "", context: str = "",
+              session: list | None = None) -> AsyncIterator[str]:
         sl = f"Subject: {subject}\n\n" if subject else ""
-        return self._stream_chat(
-            self.text_model,
+        return self._text(
             [{"role": "system", "content": prompts.SOLVE_SYSTEM},
              {"role": "user", "content": prompts.SOLVE_USER.format(
-                 question=question, subject_line=sl)}],
+                 question=question, subject_line=sl,
+                 context_block=prompts.context_block(context),
+                 session_block=prompts.session_block(session or []))}],
             num_predict=2048, temp=0.3, think=False)
 
     def explain(self, question: str, answer: str, step: str,
-                ask: str) -> AsyncIterator[str]:
-        return self._stream_chat(
-            self.text_model,
+                ask: str, context: str = "",
+                history: list | None = None, focus: str = "") -> AsyncIterator[str]:
+        return self._text(
             [{"role": "system", "content": prompts.EXPLAIN_SYSTEM},
              {"role": "user", "content": prompts.EXPLAIN_USER.format(
-                 question=question, answer=answer[:6000], step=step, ask=ask)}],
+                 question=question, answer=answer[:6000], step=step, ask=ask,
+                 history_block=prompts.history_block(history or []),
+                 focus_block=prompts.focus_block(focus),
+                 context_block=prompts.context_block(context))}],
             num_predict=900, temp=0.3, think=False)
+
+    def notes(self, subject: str, module: str, material: str = "",
+              questions: list | None = None) -> AsyncIterator[str]:
+        mb, qb = prompts.notes_material(material, questions or [])
+        return self._text(
+            [{"role": "system", "content": prompts.NOTES_SYSTEM},
+             {"role": "user", "content": prompts.NOTES_USER.format(
+                 subject=subject, module=module, material_block=mb, questions_block=qb)}],
+            num_predict=2600, temp=0.3, think=False)
+
+    def hint(self, question: str, context: str = "") -> AsyncIterator[str]:
+        return self._text(
+            [{"role": "system", "content": prompts.HINT_SYSTEM},
+             {"role": "user", "content": prompts.HINT_USER.format(
+                 question=question, context_block=prompts.context_block(context))}],
+            num_predict=220, temp=0.4, think=False)

@@ -88,6 +88,8 @@ async def update_subject(sid: str, body: SubjectIn):
 
 @router.delete("/subjects/{sid}")
 async def delete_subject(sid: str):
+    # the FTS index has no foreign keys, so its passages are removed by hand
+    db.run("DELETE FROM chunks WHERE subject_id=?", (sid,))
     db.run("DELETE FROM subjects WHERE id=?", (sid,))
     return {"ok": True}
 
@@ -114,6 +116,7 @@ async def update_module(mid: str, body: ModuleIn):
 
 @router.delete("/modules/{mid}")
 async def delete_module(mid: str):
+    db.run("DELETE FROM chunks WHERE module_id=?", (mid,))
     db.run("DELETE FROM modules WHERE id=?", (mid,))
     return {"ok": True}
 

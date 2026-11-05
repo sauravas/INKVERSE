@@ -1,5 +1,8 @@
 import katex from 'katex'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import HandDiagram, { diagramTimeline } from './HandDiagram'
+import HandTable, { tableTimeline } from './HandTable'
+import Snap from './Snap'
 
 /**
  * Handwritten answer rendering.
@@ -14,8 +17,26 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react'
 const BASE_CPS = 62        // characters per second at rest
 const CATCH_UP = 3.2       // how much faster the pen may go when behind
 
+const diagramChars = new WeakMap()
+
 function segLen(s) {
-  return s.kind === 'break' ? 1 : (s.value?.length || 0)
+  if (s.kind === 'break') return 1
+  if (s.kind === 'diagram' && s.diagram) {
+    // the pen keeps going at its usual pace while the diagram is drawn, so
+    // the diagram is worth as many characters as it takes to draw
+    if (!diagramChars.has(s.diagram)) {
+      diagramChars.set(s.diagram,
+        Math.ceil((diagramTimeline(s.diagram).total / 1000) * BASE_CPS))
+    }
+    return diagramChars.get(s.diagram)
+  }
+  if (s.kind === 'table' && s.table) {
+    if (!diagramChars.has(s.table)) {
+      diagramChars.set(s.table, Math.ceil((tableTimeline(s.table).total / 1000) * BASE_CPS))
+    }
+    return diagramChars.get(s.table)
+  }
+  return s.value?.length || 0
 }
 
 // --- handwriting realism ---------------------------------------------------
@@ -43,26 +64,50 @@ function glyphStyle(seed, i) {
 
 /** Build per-character spans once; reveal by slicing the memoised array. */
 function useGlyphs(text, seed) {
+  // Glyphs are grouped into words. Each letter is its own inline-block, which
+  // the browser would otherwise treat as a break opportunity - wrapping
+  // "Waiting" as "Waitin / g". The word wrapper keeps letters together.
   return useMemo(() => {
     const out = []
+    let word = null
+    const flush = () => { if (word) { out.push(word); word = null } }
     for (let i = 0; i < text.length; i++) {
       const ch = text[i]
       if (ch === '\n') {
-        out.push(<br key={i} />)
+        flush()
+        out.push({ kind: 'br', at: i })
       } else if (ch === ' ') {
-        // a plain space keeps the DOM smaller and word spacing natural
-        out.push(' ')
+        flush()
+        out.push({ kind: 'space', at: i })
       } else {
-        out.push(<span key={i} style={glyphStyle(seed, i)}>{ch}</span>)
+        if (!word) word = { kind: 'word', at: i, chars: [] }
+        word.chars.push({ ch, i })
       }
     }
+    flush()
     return out
   }, [text, seed])
 }
 
 function HandRun({ text, seed, count }) {
-  const glyphs = useGlyphs(text, seed)
-  return <>{count >= text.length ? glyphs : glyphs.slice(0, Math.max(0, count))}</>
+  const parts = useGlyphs(text, seed)
+  const out = []
+  for (const p of parts) {
+    if (p.at >= count) break
+    if (p.kind === 'br') out.push(<br key={p.at} />)
+    else if (p.kind === 'space') out.push(' ')
+    else {
+      const shown = p.chars.filter((c) => c.i < count)
+      out.push(
+        <span key={p.at} style={{ whiteSpace: 'nowrap' }}>
+          {shown.map((c) => (
+            <span key={c.i} style={glyphStyle(seed, c.i)}>{c.ch}</span>
+          ))}
+        </span>,
+      )
+    }
+  }
+  return <>{out}</>
 }
 
 export function stepsFromEvents(events) {
@@ -73,7 +118,9 @@ export function stepsFromEvents(events) {
       cur = { index: e.index, title: e.title, final: e.final, segments: [] }
       steps.push(cur)
     } else if (e.type === 'segment' && cur) {
-      cur.segments.push({ kind: e.kind, value: e.value, display: e.display })
+      cur.segments.push({ kind: e.kind, value: e.value, display: e.display,
+                          ...(e.diagram ? { diagram: e.diagram } : {}),
+                          ...(e.table ? { table: e.table } : {}) })
     }
   }
   return steps
@@ -127,28 +174,48 @@ function MathSpan({ value, display }) {
   }
   return (
     <span
-      className={`ink-math ${display ? 'my-2 block text-center' : 'ink-math--tilt'}`}
+      data-tex={value}
+      className={`ink-math ${display ? 'block text-center' : 'ink-math--tilt'}`}
       dangerouslySetInnerHTML={{ __html: html }}
     />
   )
 }
 
-function Segment({ seg, revealed, offset }) {
+function Segment({ seg, revealed, offset, onAskBlock }) {
   const len = segLen(seg)
   const local = revealed - offset
   if (local <= 0) return null
 
-  if (seg.kind === 'break') return <span className="block h-2" />
+  // a blank line in the model's text: the next line already starts on a rule
+  if (seg.kind === 'break') return null
+
+  if (seg.kind === 'diagram' && seg.diagram) {
+    // mounted when the pen reaches it; animates only if it is being written
+    // now, not when an already finished answer is opened
+    return <HandDiagram diagram={seg.diagram} animate={local < len}
+                        onNodeClick={onAskBlock} />
+  }
+
+  if (seg.kind === 'table' && seg.table) {
+    return <Snap><HandTable table={seg.table} animate={local < len} /></Snap>
+  }
 
   if (seg.kind === 'math') {
     const p = Math.max(0, Math.min(1, len ? local / len : 1))
+    const reveal = p < 1 ? { clipPath: `inset(0 ${(1 - p) * 100}% 0 0)` } : undefined
+    if (seg.display) {
+      // display maths is centred in a whole number of ruled lines
+      return (
+        <Snap>
+          <div style={reveal}><MathSpan value={seg.value} display /></div>
+        </Snap>
+      )
+    }
+    // same box as the maths inside it, so the line never changes height
     return (
-      <span
-        style={p < 1
-          ? { clipPath: `inset(0 ${(1 - p) * 100}% 0 0)`, display: 'inline-block' }
-          : undefined}
-      >
-        <MathSpan value={seg.value} display={seg.display} />
+      <span style={{ ...reveal, display: 'inline-block', height: 'var(--rule)',
+                     verticalAlign: 'top' }}>
+        <MathSpan value={seg.value} display={false} />
       </span>
     )
   }
@@ -157,7 +224,7 @@ function Segment({ seg, revealed, offset }) {
 }
 
 const StepCard = memo(function StepCard({
-  step, offset, revealed, selected, onSelect, onAsk, writing,
+  step, offset, revealed, selected, onSelect, onAsk, onAskBlock, writing, notes,
 }) {
   const total = step.segments.reduce((n, s) => n + segLen(s), 0)
   const localRevealed = revealed - offset
@@ -169,18 +236,22 @@ const StepCard = memo(function StepCard({
   return (
     <section
       data-selected={selected ? 'true' : 'false'}
+      data-step-index={step.index}
       onClick={() => onSelect?.(step)}
-      className="step-card group cursor-pointer rounded-r-lg py-3 pl-4 pr-3"
+      className="step-card group cursor-pointer rounded-r-lg pl-4 pr-3"
     >
-      <header className="mb-1 flex items-baseline gap-2">
-        <span className={`hand shrink-0 text-[1.45rem] leading-none ${
+      <header className="lined-one flex items-baseline gap-2">
+        <span className={`hand lined-text shrink-0 text-[1.45rem] ${
           step.final ? 'text-emerald-800' : 'text-accent'}`}>
-          {step.final ? 'Answer' : `Step ${step.index}`}
+          {notes
+            // in notes a section is named by its topic, not numbered as a step
+            ? (step.final ? 'Key points to remember' : step.title || `Topic ${step.index}`)
+            : (step.final ? 'Answer' : `Step ${step.index}`)}
         </span>
-        {step.title && !step.final && (
+        {step.title && !step.final && !notes && (
           // models sometimes put LaTeX in a title despite being told not to
           <RichText text={step.title}
-                    className="hand text-[1.3rem] leading-tight text-ink-soft" />
+                    className="hand lined-text min-w-0 truncate text-[1.3rem] text-ink-soft" />
         )}
         <button
           type="button"
@@ -193,11 +264,12 @@ const StepCard = memo(function StepCard({
         </button>
       </header>
 
-      <div className="hand whitespace-pre-wrap text-[1.42rem] leading-[2rem] text-ink">
+      <div className="hand lined-text whitespace-pre-wrap text-[1.42rem] text-ink">
         {step.segments.map((seg, i) => {
           const off = run
           run += segLen(seg)
-          return <Segment key={i} seg={seg} revealed={revealed} offset={off} />
+          return <Segment key={i} seg={seg} revealed={revealed} offset={off}
+                          onAskBlock={onAskBlock ? (label) => onAskBlock(step, label) : undefined} />
         })}
         {writing && !complete && <span className="nib" />}
       </div>
@@ -207,7 +279,7 @@ const StepCard = memo(function StepCard({
 
 export default function AnswerSheet({
   steps, streaming, instant, selectedStep, onSelectStep, onAskStep, emptyHint,
-  afterStep, dense,
+  afterStep, onAskBlock, notes,
 }) {
   const offsets = useMemo(() => {
     const out = []
@@ -225,7 +297,7 @@ export default function AnswerSheet({
   if (!steps.length) {
     return (
       <div className="flex h-full items-center justify-center px-8 text-center">
-        <p className="hand max-w-sm text-[1.4rem] leading-8 text-ink-soft/70">
+        <p className="hand lined-text max-w-sm text-[1.4rem] text-ink-soft/70">
           {emptyHint || 'Write a question on the page, then press Solve.'}
         </p>
       </div>
@@ -233,7 +305,8 @@ export default function AnswerSheet({
   }
 
   return (
-    <div className={dense ? '' : 'divide-y divide-rule/70'}>
+    // no dividers: a 1px border per step would walk the text off the rules
+    <div>
       {steps.map((s, i) => (
         <div key={s.index}>
           <StepCard
@@ -244,12 +317,14 @@ export default function AnswerSheet({
             selected={selectedStep?.index === s.index}
             onSelect={onSelectStep}
             onAsk={onAskStep}
+            onAskBlock={onAskBlock}
+            notes={notes}
           />
           {afterStep?.(s)}
         </div>
       ))}
       {streaming && revealed >= offsets.total && (
-        <div className="px-4 py-3 text-xs text-ink-soft/60">
+        <div className="lined-row px-4 text-xs text-ink-soft/60">
           <span className="nib" /> thinking…
         </div>
       )}
@@ -263,21 +338,47 @@ const INLINE_SPLIT =
   /\$\$(.+?)\$\$|\\\[(.+?)\\\]|\\\((.+?)\\\)|\$([^$\n]+?)\$/gs
 
 /** Render a plain string, typesetting any LaTeX it contains. */
+/** Split a plain string into text and math segments. */
+export function splitRich(text) {
+  const out = []
+  let pos = 0
+  const re = new RegExp(INLINE_SPLIT)
+  let m
+  while ((m = re.exec(text || '')) !== null) {
+    if (m.index > pos) out.push({ kind: 'text', value: text.slice(pos, m.index) })
+    const display = m[1] !== undefined || m[2] !== undefined
+    out.push({ kind: 'math', display, value: m[1] ?? m[2] ?? m[3] ?? m[4] })
+    pos = m.index + m[0].length
+  }
+  if (pos < (text || '').length) out.push({ kind: 'text', value: text.slice(pos) })
+  return out
+}
+
+/**
+ * A string written out by the pen, at the same steady rate as answers.
+ * Used to write a question-bank question onto the page when it opens.
+ */
+export function WrittenText({ text, className, animate = true }) {
+  const segs = useMemo(() => splitRich(text), [text])
+  const offsets = useMemo(() => {
+    let run = 0
+    return segs.map((s) => { const o = run; run += segLen(s); return o })
+  }, [segs])
+  const total = segs.reduce((n, s) => n + segLen(s), 0)
+  const revealed = useWriter(total, !animate)
+  return (
+    <span className={className}>
+      {segs.map((s, i) => (
+        <Segment key={`${text.length}-${i}`} seg={s} revealed={revealed}
+                 offset={offsets[i]} />
+      ))}
+      {revealed < total && <span className="nib" />}
+    </span>
+  )
+}
+
 export function RichText({ text, className }) {
-  const parts = useMemo(() => {
-    const out = []
-    let pos = 0
-    const re = new RegExp(INLINE_SPLIT)
-    let m
-    while ((m = re.exec(text)) !== null) {
-      if (m.index > pos) out.push({ kind: 'text', value: text.slice(pos, m.index) })
-      const display = m[1] !== undefined || m[2] !== undefined
-      out.push({ kind: 'math', display, value: m[1] ?? m[2] ?? m[3] ?? m[4] })
-      pos = m.index + m[0].length
-    }
-    if (pos < text.length) out.push({ kind: 'text', value: text.slice(pos) })
-    return out
-  }, [text])
+  const parts = useMemo(() => splitRich(text), [text])
 
   return (
     <span className={className}>
@@ -293,6 +394,18 @@ export function stepToText(step) {
   const body = step.segments.map((s) => {
     if (s.kind === 'break') return '\n'
     if (s.kind === 'math') return s.display ? `$$${s.value}$$` : `$${s.value}$`
+    if (s.kind === 'diagram' && s.diagram) {
+      // follow-up prompts need to know what was drawn, not just its title
+      const name = Object.fromEntries(s.diagram.nodes.map((n) => [n.id, n.label]))
+      const rel = s.diagram.edges.map((e) => `${name[e.from]} -> ${name[e.to]}`
+        + (e.label ? ` (${e.label})` : '')).join('; ')
+      return `\n[Diagram: ${s.diagram.title}. ${rel}]\n`
+    }
+    if (s.kind === 'table' && s.table) {
+      const row = (r) => `| ${r.join(' | ')} |`
+      return `\n${[row(s.table.header), row(s.table.header.map(() => '---')),
+        ...s.table.rows.map(row)].join('\n')}\n`
+    }
     return s.value
   }).join('')
   const head = step.final ? 'Final answer' : `Step ${step.index}: ${step.title || ''}`

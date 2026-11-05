@@ -50,6 +50,22 @@ AGENTS = [
      "status": "active",
      "role": "Explains one selected step without regenerating the answer",
      "invoked_by": "POST /api/ai/explain"},
+    {"id": "librarian", "name": "Librarian Agent", "kind": "rules", "stage": "db",
+     "status": "active",
+     "role": "Finds passages from imported material to ground the answer",
+     "invoked_by": "Solve · Explain · Hint, before the text model runs"},
+    {"id": "researcher", "name": "Research Agent", "kind": "network",
+     "stage": "web", "status": "active",
+     "role": "Looks the question up on the web when the student asks for it",
+     "invoked_by": "Solve with web search enabled"},
+    {"id": "hinter", "name": "Hint Agent", "kind": "llm", "stage": "text",
+     "status": "active",
+     "role": "Gives one nudge toward the method, never the answer",
+     "invoked_by": "POST /api/ai/hint (question bank)"},
+    {"id": "notewriter", "name": "Notes Agent", "kind": "llm", "stage": "text",
+     "status": "active",
+     "role": "Writes a module's study notes from its imported material",
+     "invoked_by": "POST /api/study-notes/{module}/prepare"},
     {"id": "mentor", "name": "Mentor Agent", "kind": "rules", "stage": "db",
      "status": "active",
      "role": "Computes exam readiness and blockers from real question rows",
@@ -65,7 +81,13 @@ EDGES = [
     ("student", "orchestrator", "page / question / follow-up", "route"),
     ("orchestrator", "reader", "read page", "route"),
     ("reader", "verifier", "digits found", "delegate"),
+    ("orchestrator", "librarian", "ground the question", "route"),
+    ("orchestrator", "researcher", "web search (opt-in)", "route"),
+    ("librarian", "tutor", "passages", "delegate"),
+    ("researcher", "tutor", "web sources", "delegate"),
     ("orchestrator", "tutor", "solve confirmed question", "route"),
+    ("orchestrator", "hinter", "nudge, not the answer", "route"),
+    ("orchestrator", "notewriter", "prepare module notes", "route"),
     ("orchestrator", "explainer", "explain one step", "route"),
     ("explainer", "reader", "handwritten ask", "delegate"),
     ("orchestrator", "mentor", "dashboard", "route"),
@@ -76,6 +98,10 @@ EDGES = [
     ("explainer", "text", "", "uses"),
     ("examiner", "text", "", "uses"),
     ("mentor", "db", "", "uses"),
+    ("librarian", "db", "", "uses"),
+    ("hinter", "text", "", "uses"),
+    ("notewriter", "text", "", "uses"),
+    ("researcher", "web", "", "uses"),
 ]
 
 # Every step id below is either an agent id (its span drives the state) or an
@@ -90,6 +116,8 @@ FLOWS = [
     ]},
     {"id": "solve", "name": "Solve", "steps": [
         {"id": "consent", "agent": "orchestrator", "label": "Consent gate"},
+        {"id": "librarian", "agent": "librarian", "label": "Librarian grounds it"},
+        {"id": "researcher", "agent": "researcher", "label": "Web search (opt-in)"},
         {"id": "tutor", "agent": "tutor", "label": "Tutor streams the solution"},
         {"id": "parse", "agent": "orchestrator", "label": "Parser makes typed steps"},
         {"id": "save", "agent": "orchestrator", "label": "Answer saved if filed"},
@@ -97,9 +125,23 @@ FLOWS = [
     {"id": "explain", "name": "Ask about a step", "steps": [
         {"id": "consent", "agent": "orchestrator", "label": "Consent gate"},
         {"id": "reader", "agent": "reader", "label": "Reader reads handwritten ask"},
+        {"id": "librarian", "agent": "librarian", "label": "Librarian grounds it"},
         {"id": "explainer", "agent": "explainer", "label": "Explainer answers one step"},
         {"id": "parse", "agent": "orchestrator", "label": "Parser makes typed steps"},
         {"id": "save", "agent": "orchestrator", "label": "Explanation saved if filed"},
+    ]},
+    {"id": "notes", "name": "Prepare notes", "steps": [
+        {"id": "consent", "agent": "orchestrator", "label": "Consent gate"},
+        {"id": "material", "agent": "orchestrator", "label": "Imported passages gathered"},
+        {"id": "notewriter", "agent": "notewriter", "label": "Notes Agent writes them"},
+        {"id": "parse", "agent": "orchestrator", "label": "Parser makes typed sections"},
+        {"id": "save", "agent": "orchestrator", "label": "Notes saved to the module"},
+    ]},
+    {"id": "import", "name": "Import", "steps": [
+        {"id": "read", "agent": "orchestrator", "label": "Text layer, then OCR"},
+        {"id": "parse", "agent": "orchestrator", "label": "Modules and questions proposed"},
+        {"id": "review", "agent": "orchestrator", "label": "Student corrects the proposal"},
+        {"id": "commit", "agent": "orchestrator", "label": "Filed and indexed"},
     ]},
     {"id": "dashboard", "name": "Readiness", "steps": [
         {"id": "mentor", "agent": "mentor", "label": "Mentor checks each subject"},
@@ -121,7 +163,8 @@ def topology(provider) -> dict:
             {"id": "student", "name": "Student", "detail": "laptop canvas · phone pen"},
             {"id": "vision", "name": "Vision model", "detail": vision},
             {"id": "text", "name": "Text model", "detail": text},
-            {"id": "db", "name": "SQLite", "detail": "questions · recall · modules"},
+            {"id": "db", "name": "SQLite", "detail": "questions · recall · imported passages"},
+            {"id": "web", "name": "Web", "detail": "Wikipedia · DuckDuckGo (opt-in)"},
         ],
         "edges": [{"from": a, "to": b, "label": l, "kind": k} for a, b, l, k in EDGES],
         "flows": FLOWS,
@@ -185,13 +228,15 @@ async def read_page(provider, image_b64: str, hint: str = "") -> dict:
     return out
 
 
-async def tutor(provider, question: str, subject: str = ""):
+async def tutor(provider, question: str, subject: str = "", context: str = "",
+                session: list | None = None):
     """Async generator of raw model text; parsing stays in the router."""
     model = _model(provider, "text")
     with obs.span("tutor", f"Solving “{obs.preview(question, 50)}” with {model}",
-                  model=model):
+                  model=model, grounded=bool(context)):
         n = 0
-        async with contextlib.aclosing(provider.solve(question, subject)) as st:
+        async with contextlib.aclosing(
+                provider.solve(question, subject, context, session or [])) as st:
             async for chunk in st:
                 if n == 0:
                     obs.emit("model.first_token", "First tokens streaming",
@@ -201,13 +246,16 @@ async def tutor(provider, question: str, subject: str = ""):
         obs.emit("agent.output", f"Solution streamed ({n} chunks)", chunks=n)
 
 
-async def explainer(provider, question: str, answer: str, step: str, ask: str):
+async def explainer(provider, question: str, answer: str, step: str, ask: str,
+                    context: str = "", history: list | None = None,
+                    focus: str = ""):
     model = _model(provider, "text")
     with obs.span("explainer", f"Explaining one step: “{obs.preview(ask, 50)}”",
-                  model=model):
+                  model=model, focused=bool(focus)):
         n = 0
         async with contextlib.aclosing(
-                provider.explain(question, answer, step, ask)) as st:
+                provider.explain(question, answer, step, ask, context,
+                                 history or [], focus)) as st:
             async for chunk in st:
                 if n == 0:
                     obs.emit("model.first_token", "First tokens streaming",
@@ -239,3 +287,71 @@ def mentor(subject: dict, modules: list[dict], questions: list[dict]) -> dict:
                      f"{obs.preview(rep['blockers'][0], 60)}",
                      blockers=len(rep["blockers"]))
     return rep
+
+
+async def hinter(provider, question: str, context: str = ""):
+    """One nudge toward the method. Deliberately never the answer."""
+    model = _model(provider, "text")
+    with obs.span("hinter", f"Hint for “{obs.preview(question, 50)}”",
+                  model=model, grounded=bool(context)):
+        n = 0
+        async with contextlib.aclosing(provider.hint(question, context)) as st:
+            async for chunk in st:
+                if n == 0:
+                    obs.emit("model.first_token", "First tokens streaming",
+                             model=model)
+                n += 1
+                yield chunk
+        obs.emit("agent.output", f"Hint streamed ({n} chunks)", chunks=n)
+
+
+async def notewriter(provider, subject: str, module: str, material: str,
+                     questions: list):
+    """Writes a module's study notes from its own imported material."""
+    model = _model(provider, "text")
+    with obs.span("notewriter", f"Preparing notes for {module}", model=model,
+                  passages=len(material) // 500, questions=len(questions)):
+        n = 0
+        async with contextlib.aclosing(
+                provider.notes(subject, module, material, questions)) as st:
+            async for chunk in st:
+                if n == 0:
+                    obs.emit("model.first_token", "First tokens streaming",
+                             model=model)
+                n += 1
+                yield chunk
+        obs.emit("agent.output", f"Notes streamed ({n} chunks)", chunks=n)
+
+
+def librarian(query: str, question_id=None, subject_id=None, module_id=None):
+    """Retrieval over imported material. BM25 over SQLite FTS5, no model."""
+    from . import retrieval
+    with obs.span("librarian", f"Searching imported material for "
+                               f"“{obs.preview(query, 40)}”"):
+        block, used = retrieval.context_for(query, question_id, subject_id,
+                                            module_id)
+        if used:
+            obs.emit("agent.output",
+                     f"Grounded in {len(used)} passage(s): "
+                     f"{obs.preview(used[0].get('heading', ''), 50)}",
+                     passages=len(used))
+        else:
+            obs.emit("agent.output", "Nothing imported matches - answering "
+                                     "from the model alone")
+    return block, used
+
+
+async def researcher(query: str):
+    """Optional web lookup. Leaves this machine, so it is opt-in per request."""
+    from . import websearch
+    with obs.span("researcher", f"Web search: “{obs.preview(query, 40)}”",
+                  level="warn"):
+        w = await websearch.lookup(query)
+        if w["block"]:
+            obs.emit("agent.output", f"{len(w['sources'])} web source(s) found",
+                     sources=len(w["sources"]))
+        else:
+            obs.emit("agent.output",
+                     f"No web results ({w.get('skipped') or w.get('error') or 'none'})",
+                     level="warn")
+    return w
