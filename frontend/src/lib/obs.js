@@ -38,6 +38,7 @@ export function useAgentFeed(provider) {
   const [seedResident, setSeedResident] = useState([])
   const [now, setNow] = useState(() => Date.now())
   const lastSeq = useRef(0)
+  const openedAt = useRef(0)
   const statsTimer = useRef(null)
 
   const refreshTopo = useMemo(() => () => {
@@ -65,6 +66,7 @@ export function useAgentFeed(provider) {
       // a (re)connect replays the server buffer; start clean so a restarted
       // server, whose sequence numbers begin again at 1, is not filtered out
       lastSeq.current = 0
+      openedAt.current = Date.now()
       setEvents([])
       setStatus('live')
     }
@@ -74,6 +76,9 @@ export function useAgentFeed(provider) {
       try { ev = JSON.parse(m.data) } catch { return }
       if (!ev || ev.seq <= lastSeq.current) return
       lastSeq.current = ev.seq
+      // the replayed backlog arrives right after connecting; only events that
+      // happen while the page is open are animated as moving data
+      ev.live = Date.now() - openedAt.current > 1200
       setEvents((prev) => {
         const next = prev.length >= MAX_EVENTS ? prev.slice(-MAX_EVENTS + 1) : prev.slice()
         next.push(ev)
