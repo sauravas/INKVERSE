@@ -321,20 +321,31 @@ class OllamaProvider:
         return data
 
     # -- stage 2: reasoning ------------------------------------------------
-    def solve(self, question: str, subject: str = "") -> AsyncIterator[str]:
+    def solve(self, question: str, subject: str = "",
+              context: str = "") -> AsyncIterator[str]:
         sl = f"Subject: {subject}\n\n" if subject else ""
         return self._stream_chat(
             self.text_model,
             [{"role": "system", "content": prompts.SOLVE_SYSTEM},
              {"role": "user", "content": prompts.SOLVE_USER.format(
-                 question=question, subject_line=sl)}],
+                 question=question, subject_line=sl,
+                 context_block=prompts.context_block(context))}],
             num_predict=2048, temp=0.3, think=False)
 
     def explain(self, question: str, answer: str, step: str,
-                ask: str) -> AsyncIterator[str]:
+                ask: str, context: str = "") -> AsyncIterator[str]:
         return self._stream_chat(
             self.text_model,
             [{"role": "system", "content": prompts.EXPLAIN_SYSTEM},
              {"role": "user", "content": prompts.EXPLAIN_USER.format(
-                 question=question, answer=answer[:6000], step=step, ask=ask)}],
+                 question=question, answer=answer[:6000], step=step, ask=ask,
+                 context_block=prompts.context_block(context))}],
             num_predict=900, temp=0.3, think=False)
+
+    def hint(self, question: str, context: str = "") -> AsyncIterator[str]:
+        return self._stream_chat(
+            self.text_model,
+            [{"role": "system", "content": prompts.HINT_SYSTEM},
+             {"role": "user", "content": prompts.HINT_USER.format(
+                 question=question, context_block=prompts.context_block(context))}],
+            num_predict=220, temp=0.4, think=False)

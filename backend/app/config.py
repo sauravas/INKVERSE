@@ -49,3 +49,7 @@ GEMINI_MODEL = os.getenv("INKWISE_GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 
 REQUEST_TIMEOUT = float(os.getenv("INKWISE_TIMEOUT", "900"))
+
+# --- importing ---------------------------------------------------------------
+# Path to tesseract.exe. Auto-detected in the usual install locations if unset.
+TESSERACT_CMD = os.getenv("INKWISE_TESSERACT", "")

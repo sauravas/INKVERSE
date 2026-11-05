@@ -151,7 +151,7 @@ SOLVE_SYSTEM = (
 
 SOLVE_USER = """Solve this examination question.
 
-{subject_line}Question:
+{subject_line}{context_block}Question:
 {question}
 
 Requirements:
@@ -166,7 +166,7 @@ EXPLAIN_SYSTEM = (
     "step. Do not re-solve the whole problem.\n\n" + _BLOCK_RULES
 )
 
-EXPLAIN_USER = """Original question:
+EXPLAIN_USER = """{context_block}Original question:
 {question}
 
 The full solution that was given:
@@ -182,3 +182,26 @@ Answer only their follow-up, about that step. Be concrete: if they ask "why",
 give the rule or identity being used and show it. Keep it to at most three steps
 plus @@FINAL. Do not restate the whole solution.
 """
+
+HINT_SYSTEM = (
+    "You are an exam tutor helping a student who is stuck. You give exactly one "
+    "hint that gets them moving. You never give the answer, the final result, or "
+    "the full method - only the next idea they need.\n\n"
+    "Output format - follow exactly:\n\n"
+    "@@STEP Hint\n"
+    "<one or two sentences: the concept, rule or first move to try>\n\n"
+    "Rules:\n"
+    "- Any mathematics must be LaTeX: inline $...$, display $$...$$.\n"
+    "- Do not compute the result. Do not write @@FINAL.\n"
+)
+
+HINT_USER = """{context_block}The student is stuck on this question:
+{question}
+
+Give one hint that points them at the right idea without solving it.
+"""
+
+
+def context_block(text: str) -> str:
+    """Format retrieved material for a prompt, or nothing at all."""
+    return f"{text.strip()}\n\n" if text and text.strip() else ""

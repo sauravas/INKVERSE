@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from .. import config, db, imaging, resources
+from .. import config, db, imaging, resources, retrieval
 from ..ai import registry
 from ..ai.base import ProviderError
 from ..ai.parser import StepStreamParser, events_to_steps
@@ -33,6 +33,17 @@ class SolveIn(BaseModel):
     question: str
     subject: str = ""
     question_id: str | None = None
+    subject_id: str | None = None
+    module_id: str | None = None
+    provider: str | None = None
+    consent_cloud: bool = False
+
+
+class HintIn(BaseModel):
+    question: str
+    question_id: str | None = None
+    subject_id: str | None = None
+    module_id: str | None = None
     provider: str | None = None
     consent_cloud: bool = False
 
@@ -97,7 +108,7 @@ async def extract(body: ExtractIn):
     return out
 
 
-async def _stream_events(agen, *, on_done=None):
+async def _stream_events(agen, *, on_done=None, sources=None):
     """Parse a raw model stream into typed SSE events.
 
     Events are accumulated as they are emitted so the finished answer can be
@@ -109,6 +120,9 @@ async def _stream_events(agen, *, on_done=None):
     first = None
     try:
         yield _sse({"type": "start", "ts": t0})
+        if sources:
+            # what the answer was grounded in, so the student can check it
+            yield _sse({"type": "sources", "items": sources})
         async for chunk in agen:
             if first is None:
                 first = round(time.perf_counter() - t0, 2)
@@ -150,9 +164,11 @@ async def solve(body: SolveIn, request: Request):
                "WHERE id=?",
                (text, json.dumps(steps), db.now(), body.question_id))
 
-    agen = p.solve(body.question, body.subject)
+    context, used = retrieval.context_for(
+        body.question, body.question_id, body.subject_id, body.module_id)
+    agen = p.solve(body.question, body.subject, context)
     return StreamingResponse(
-        _stream_events(agen, on_done=persist),
+        _stream_events(agen, on_done=persist, sources=used),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
                  "Connection": "keep-alive"})
@@ -187,12 +203,13 @@ async def explain(body: ExplainIn):
             db.run("UPDATE explanations SET answer_json=? WHERE id=?",
                    (json.dumps(steps), eid))
 
-    agen = p.explain(body.question, body.answer, body.step, ask)
+    context, used = retrieval.context_for(f"{ask}\n{body.step}", body.question_id)
+    agen = p.explain(body.question, body.answer, body.step, ask, context)
 
     async def gen():
         yield _sse({"type": "ask", "value": ask, "explanation_id": eid})
         async for chunk in _stream_events(
-                agen, on_done=persist):
+                agen, on_done=persist, sources=used):
             yield chunk
 
     return StreamingResponse(
@@ -222,3 +239,22 @@ async def unload(model: str | None = None):
     if not hasattr(p, "unload"):
         raise HTTPException(400, "This provider has nothing to unload.")
     return await p.unload(model)
+
+
+@router.post("/hint")
+async def hint(body: HintIn):
+    """One nudge toward the method - deliberately not the answer.
+
+    The question bank asks the student to try first; this is the step between
+    "I'm stuck" and "show me the full solution".
+    """
+    if not body.question.strip():
+        raise HTTPException(status_code=400, detail="Question is empty.")
+    p = _resolve(body.provider, body.consent_cloud)
+    context, used = retrieval.context_for(
+        body.question, body.question_id, body.subject_id, body.module_id)
+    return StreamingResponse(
+        _stream_events(p.hint(body.question, context), sources=used),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                 "Connection": "keep-alive"})

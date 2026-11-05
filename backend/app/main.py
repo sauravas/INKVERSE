@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import config, db, resources
-from .routers import ai, notebook, pair, study
+from .routers import ai, imports, notebook, pair, study
 from .ws import hub
 
 
@@ -31,6 +31,7 @@ app.include_router(ai.router)
 app.include_router(study.router)
 app.include_router(notebook.router)
 app.include_router(pair.router)
+app.include_router(imports.router)
 
 
 @app.get("/api/status")
