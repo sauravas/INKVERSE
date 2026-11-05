@@ -70,6 +70,16 @@ def _label(p) -> str:
     return getattr(p, "label", None) or getattr(p, "name", "?")
 
 
+def _consent_step(p) -> None:
+    """Record how the consent gate was passed, inside the current run."""
+    if getattr(p, "requires_consent", False):
+        obs.emit("step", f"Student consented to send this to {_label(p)}",
+                 step="consent", level="warn")
+    else:
+        obs.emit("step", f"{_label(p)} runs on this network - nothing leaves it",
+                 step="consent")
+
+
 def _sse(event: dict) -> str:
     return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
@@ -99,9 +109,10 @@ async def extract(body: ExtractIn):
     p = _resolve(body.provider, body.consent_cloud)
     with obs.trace("read", "Student pressed Solve - read the page",
                    provider=_label(p)) as run:
+        _consent_step(p)
         try:
             if imaging.is_effectively_blank(body.image):
-                obs.emit("route", "Page is blank - no agent called")
+                obs.emit("step", "Page is blank - no agent called", step="crop")
                 return {"question": "", "confidence": 0.0, "blank": True,
                         "note": "Nothing was written on this page yet."}
             b64, info = imaging.prepare_b64(body.image)
@@ -113,15 +124,17 @@ async def extract(body: ExtractIn):
 
         if info.get("cropped"):
             o, s = info["original"], info["sent"]
-            obs.emit("route", f"Cropped page to ink: {o[0]}x{o[1]} -> {s[0]}x{s[1]}",
-                     original=list(o), sent=list(s))
+            obs.emit("step", f"Cropped page to ink: {o[0]}x{o[1]} -> {s[0]}x{s[1]}",
+                     step="crop", original=list(o), sent=list(s))
+        else:
+            obs.emit("step", "Page sent uncropped", step="crop")
         try:
             out = await agents.read_page(p, b64, body.hint)
         except ProviderError as e:
             run.fail(str(e))
             raise HTTPException(status_code=503, detail=str(e))
-        obs.emit("route", "Reading handed to the student for review "
-                          "(human in the loop)")
+        obs.emit("step", "Reading handed to the student for review "
+                         "(human in the loop)", step="review")
     out["image"] = info
     out["trace"] = run.id
     return out
@@ -154,8 +167,8 @@ async def _stream_events(agen, *, run=None, on_done=None):
             yield _sse(ev)
 
         steps = events_to_steps(seen)
-        obs.emit("route", f"Parser produced {len(steps)} typed step(s) for the UI",
-                 steps=len(steps))
+        obs.emit("step", f"Parser produced {len(steps)} typed step(s) for the UI",
+                 step="parse", steps=len(steps))
         if on_done:
             try:
                 on_done(parser.text(), steps)
@@ -185,15 +198,18 @@ async def solve(body: SolveIn, request: Request):
 
     def persist(text: str, steps: list[dict]):
         if not body.question_id:
+            obs.emit("step", "Question not filed yet - nothing saved",
+                     step="save", skipped=True)
             return
         db.run("UPDATE questions SET answer_md=?, answer_json=?, updated_at=? "
                "WHERE id=?",
                (text, json.dumps(steps), db.now(), body.question_id))
-        obs.emit("route", "Answer saved to the filed question")
+        obs.emit("step", "Answer saved to the filed question", step="save")
 
     async def gen():
         with obs.trace("solve", f"Solve “{obs.preview(body.question, 60)}”",
                        provider=_label(p)) as run:
+            _consent_step(p)
             obs.emit("route", "Routing confirmed question to Tutor", to="tutor")
             async for chunk in _stream_events(
                     agents.tutor(p, body.question, body.subject),
@@ -217,7 +233,11 @@ async def explain(body: ExplainIn):
     async def gen():
         with obs.trace("explain", f"Ask about step {body.step_index}",
                        provider=_label(p)) as run:
+            _consent_step(p)
             ask = body.ask.strip()
+            if ask:
+                obs.emit("step", "Follow-up was typed - no reading needed",
+                         step="reader", skipped=True)
             # the follow-up may itself be handwritten next to the step
             if not ask:
                 try:
@@ -245,9 +265,13 @@ async def explain(body: ExplainIn):
                         ask, db.now()))
 
             def persist(text: str, steps: list[dict]):
-                if body.question_id:
-                    db.run("UPDATE explanations SET answer_json=? WHERE id=?",
-                           (json.dumps(steps), eid))
+                if not body.question_id:
+                    obs.emit("step", "Question not filed yet - nothing saved",
+                             step="save", skipped=True)
+                    return
+                db.run("UPDATE explanations SET answer_json=? WHERE id=?",
+                       (json.dumps(steps), eid))
+                obs.emit("step", "Explanation saved to the question", step="save")
 
             yield _sse({"type": "ask", "value": ask, "explanation_id": eid})
             obs.emit("route", "Routing step + follow-up to Explainer",

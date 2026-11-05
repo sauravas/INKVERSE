@@ -233,11 +233,17 @@ async def dashboard(subject_id: str | None = None):
         if subs:
             obs.emit("route", "Routing each subject to Mentor (rules, no model)",
                      to="mentor")
+        else:
+            obs.emit("step", "No subjects yet - nothing to assess",
+                     step="mentor", skipped=True)
         for s in subs:
             mods = db.rows("SELECT * FROM modules WHERE subject_id=? "
                            "ORDER BY position, created_at", (s["id"],))
             qs = db.rows("SELECT * FROM questions WHERE subject_id=?", (s["id"],))
             reports.append(agents.mentor(s, mods, qs))
+        ready = sum(1 for r in reports if r["exam_ready"])
+        obs.emit("step", f"{ready}/{len(reports)} subject(s) exam ready",
+                 step="verdict", ready=ready, subjects=len(reports))
 
     unfiled = db.one("SELECT COUNT(*) n FROM questions WHERE subject_id IS NULL")["n"]
     overall = {

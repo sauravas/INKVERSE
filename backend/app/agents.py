@@ -78,21 +78,33 @@ EDGES = [
     ("mentor", "db", "", "uses"),
 ]
 
+# Every step id below is either an agent id (its span drives the state) or an
+# orchestrator step emitted as a "step" event with data.step = id.
 FLOWS = [
-    {"id": "read", "name": "Read a page",
-     "steps": ["Consent gate (cloud only)", "Blank-page check, crop to ink",
-               "Reader transcribes", "Verifier re-reads if digits found",
-               "Student confirms or corrects the question"]},
-    {"id": "solve", "name": "Solve",
-     "steps": ["Tutor streams the solution",
-               "Parser turns model text into typed step events",
-               "React renders the steps; answer saved if the question is filed"]},
-    {"id": "explain", "name": "Ask about a step",
-     "steps": ["Reader transcribes the follow-up if handwritten",
-               "Explainer answers for that one step only"]},
-    {"id": "dashboard", "name": "Readiness",
-     "steps": ["Mentor computes coverage, mastery and recall from SQLite",
-               "Every unmet requirement is returned as a named blocker"]},
+    {"id": "read", "name": "Read a page", "steps": [
+        {"id": "consent", "agent": "orchestrator", "label": "Consent gate"},
+        {"id": "crop", "agent": "orchestrator", "label": "Blank check, crop to ink"},
+        {"id": "reader", "agent": "reader", "label": "Reader transcribes"},
+        {"id": "verifier", "agent": "verifier", "label": "Verifier re-reads digits"},
+        {"id": "review", "agent": "orchestrator", "label": "Student confirms question"},
+    ]},
+    {"id": "solve", "name": "Solve", "steps": [
+        {"id": "consent", "agent": "orchestrator", "label": "Consent gate"},
+        {"id": "tutor", "agent": "tutor", "label": "Tutor streams the solution"},
+        {"id": "parse", "agent": "orchestrator", "label": "Parser makes typed steps"},
+        {"id": "save", "agent": "orchestrator", "label": "Answer saved if filed"},
+    ]},
+    {"id": "explain", "name": "Ask about a step", "steps": [
+        {"id": "consent", "agent": "orchestrator", "label": "Consent gate"},
+        {"id": "reader", "agent": "reader", "label": "Reader reads handwritten ask"},
+        {"id": "explainer", "agent": "explainer", "label": "Explainer answers one step"},
+        {"id": "parse", "agent": "orchestrator", "label": "Parser makes typed steps"},
+        {"id": "save", "agent": "orchestrator", "label": "Explanation saved if filed"},
+    ]},
+    {"id": "dashboard", "name": "Readiness", "steps": [
+        {"id": "mentor", "agent": "mentor", "label": "Mentor checks each subject"},
+        {"id": "verdict", "agent": "orchestrator", "label": "Readiness + blockers returned"},
+    ]},
 ]
 
 
@@ -168,7 +180,8 @@ async def read_page(provider, image_b64: str, hint: str = "") -> dict:
                  agent="reader", to="verifier")
         out = await verifier(provider, image_b64, out)
     else:
-        obs.emit("route", "No digits - verification skipped", agent="orchestrator")
+        obs.emit("step", "No digits - verification not needed",
+                 agent="orchestrator", step="verifier", skipped=True)
     return out
 
 

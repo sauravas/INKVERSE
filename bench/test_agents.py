@@ -171,6 +171,32 @@ evs = run_events(last_trace("dashboard"))
 check("Mentor ran", agents_started(evs) == ["mentor"])
 check("no model call", not any(e["kind"] == "model.call" for e in evs))
 
+print("flow steps are tagged for the live tracker")
+
+
+def steps_of(flow):
+    return {(e["data"]["step"], bool(e["data"].get("skipped")))
+            for e in run_events(last_trace(flow)) if e["kind"] == "step"}
+
+
+r = c.post("/api/ai/extract", json={"image": page_png(), "provider": "local"}).json()
+check("read: consent, crop, review",
+      {("consent", False), ("crop", False), ("review", False)} <= steps_of("read"),
+      steps_of("read"))
+c.post("/api/ai/solve", json={"question": "x^2-5x+6=0", "provider": "local"})
+check("solve: parse done, save skipped (not filed)",
+      {("consent", False), ("parse", False), ("save", True)} <= steps_of("solve"),
+      steps_of("solve"))
+c.post("/api/ai/explain", json={"question": "q", "answer": "a", "step": "s",
+                                "step_index": 1, "ask": "why?", "provider": "local"})
+check("explain: typed ask skips reader",
+      ("reader", True) in steps_of("explain"), steps_of("explain"))
+c.get("/api/study/dashboard")
+check("dashboard: verdict step", ("verdict", False) in steps_of("dashboard"))
+flows = c.get("/api/obs/agents").json()["flows"]
+check("flows are structured", all(isinstance(st, dict) and "id" in st
+                                  for f in flows for st in f["steps"]))
+
 print("stats")
 s = c.get("/api/obs/agents").json()["stats"]
 check("per-agent counters", s["reader"]["calls"] >= 4 and s["tutor"]["errors"] == 1, s)
