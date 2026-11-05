@@ -13,11 +13,17 @@ and never receives anything without an explicit confirmation.
 ## Quick start
 
 ```powershell
-# one command: builds the frontend if needed, then serves app + API + WebSocket
+# one command: frees its ports, starts Ollama if needed, rebuilds the frontend
+# if anything changed, then serves app + API + WebSocket
 .\start.ps1
 ```
 
 Open <http://localhost:8000>. For the phone, click **Connect phone** and scan.
+
+There is **one port**, deliberately. Everything - the app, the API and the
+pairing socket - is served by FastAPI on :8000, so the address you open is the
+address the phone uses, and there is no second build of the app to drift out of
+step with the first.
 
 Requirements: Python 3.11+, Node 18+, and [Ollama](https://ollama.com) running
 with the two models below already pulled.
@@ -27,10 +33,13 @@ ollama pull gemma3:4b      # 3.3 GB - reads handwriting
 ollama pull qwen2.5:14b    # 9.0 GB - solves the question
 ```
 
-Dev mode (Vite on :5173 with hot reload, API on :8000):
+Dev mode rebuilds `frontend/dist` on every save and reloads the API, still on
+the one port:
 
 ```powershell
-.\start.ps1 -Dev
+.\start.ps1 -Dev        # same URL, rebuilds on save
+.\start.ps1 -Fresh      # force a clean frontend build
+.\start.ps1 -Port 9000  # somewhere else
 ```
 
 ---
@@ -373,6 +382,7 @@ With the backend running on :8000:
 # fast, no model needed
 .\.venv\Scripts\python.exe bench\test_parser.py          # stream parser, chunk-boundary safety
 .\.venv\Scripts\python.exe bench\test_retry.py           # runner-crash recovery (simulated)
+.\.venv\Scripts\python.exe bench\test_gpu_fallback.py    # GPU driver drops the model -> finish on CPU
 .\.venv\Scripts\python.exe bench\test_ingest.py          # import parser + Tesseract OCR
 .\.venv\Scripts\python.exe bench\test_sync.py            # two clients, one workspace
 .\.venv\Scripts\python.exe bench\test_import_api.py      # import -> commit -> retrieve
@@ -384,6 +394,8 @@ node frontend\gap-check.mjs                              # browser: answer follo
 node frontend\wrap-check.mjs                             # browser: words never split across lines
 node frontend\blocks-gallery.mjs                         # browser: every diagram kind + a table
 node frontend\circle-e2e.mjs                             # browser: circle a block/formula/word
+node frontend\latex-check.mjs                            # browser: no raw LaTeX reaches the page
+node frontend\import-live.mjs                            # browser: an import reaches a second tab, live
 .\.venv\Scripts\python.exe bench	est_agents.py           # orchestration + observability
 
 # need Ollama (slow)
