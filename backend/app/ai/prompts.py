@@ -66,6 +66,24 @@ def looks_mathematical(s: str) -> bool:
         t in (s or "") for t in ("^", "_", "\\frac", "\\int", "\\sum", "="))
 
 
+def merge_readings(first: dict, second: dict) -> dict:
+    """Combine an independent second reading into the first.
+
+    Disagreement does not pick a winner: it caps confidence and attaches the
+    other reading so the student chooses.
+    """
+    data = dict(first)
+    a = normalise_for_compare(first.get("question", ""))
+    b = normalise_for_compare(second.get("question", ""))
+    data["verified"] = True
+    if a != b and b:
+        data["alternative"] = second["question"]
+        data["disagreement"] = True
+        # the two readings differ, so neither deserves high confidence
+        data["confidence"] = min(data.get("confidence", 0.0), 0.45)
+    return data
+
+
 def parse_extraction(raw: str) -> dict:
     """Parse the delimited transcription reply.
 

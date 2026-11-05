@@ -26,3 +26,11 @@ Exam readiness, syllabus completion and recall accuracy are computed in SQL/Pyth
 from real rows (question status, revision counts, recall attempts). The model is
 never asked whether a student is ready. See `backend/app/readiness.py` — pure
 functions, unit-testable, no network.
+
+## 4. Orchestration is code, and every hop is observable
+The orchestrator routes between the five agents with plain code (see
+`backend/app/agents.py`); no model chooses which agent runs. Every request is a
+traced run and every agent call a span, emitted through `backend/app/obs.py`.
+`obs.emit()` never raises and the event buffer is bounded and in memory, so
+observability cannot slow, block or break writing or solving. Events never
+carry images, only short text previews.

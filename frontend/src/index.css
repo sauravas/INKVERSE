@@ -103,3 +103,25 @@ html, body, #root {
 @media print {
   .no-print { display: none !important; }
 }
+
+/* --- agent observability rails ------------------------------------------- */
+.edge-live {
+  stroke-dasharray: 5 4;
+  animation: edge-flow 0.6s linear infinite;
+}
+.edge-fading {
+  stroke-dasharray: 5 4;
+  opacity: 0.45;
+  transition: opacity 0.6s ease;
+}
+@keyframes edge-flow { to { stroke-dashoffset: -9; } }
+
+.node-live { animation: node-pulse 1.2s ease-in-out infinite; }
+@keyframes node-pulse { 50% { stroke-opacity: 0.35; } }
+
+.agent-dot-live { animation: dot-pulse 1s ease-in-out infinite; }
+@keyframes dot-pulse { 50% { opacity: 0.3; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .edge-live, .node-live, .agent-dot-live { animation: none; }
+}

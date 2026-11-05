@@ -17,7 +17,7 @@ from typing import AsyncIterator
 
 import httpx
 
-from .. import config, resources
+from .. import config, obs, resources
 from . import prompts
 from .base import ProviderError
 
@@ -120,6 +120,9 @@ class OllamaProvider:
         if other == model:
             return
         if other in await self._loaded():
+            obs.emit("model.evict",
+                     f"Evicting {other} so {model} can load (one stage at a time)",
+                     model=other, for_model=model)
             await self.unload(other)
 
     async def _guard(self, model: str):
@@ -138,6 +141,7 @@ class OllamaProvider:
             return
         ok, msg = resources.check(size, config.MIN_FREE_RAM_GB)
         if not ok:
+            obs.emit("guard.block", msg, level="error", model=model)
             raise ProviderError(msg)
 
     async def unload(self, model: str | None = None) -> dict:
@@ -173,6 +177,10 @@ class OllamaProvider:
                            attempts=5) -> AsyncIterator[str]:
         await self._exclusive(model)
         await self._guard(model)
+        warm = model in await self._loaded()
+        obs.emit("model.call",
+                 f"{model} {'warm' if warm else 'cold - loading into memory'}",
+                 model=model, warm=warm, provider=self.label)
         body = {
             "model": model, "messages": messages, "stream": True,
             "keep_alive": config.OLLAMA_KEEP_ALIVE,
@@ -231,6 +239,9 @@ class OllamaProvider:
             # each attempt rather than hammering a wedged driver. Only the
             # model actually in use is evicted, not whatever the other stage
             # has loaded (a concurrent request may depend on that).
+            obs.emit("model.retry",
+                     f"{model} runner crashed - retry {attempt + 2}/{attempts}",
+                     level="warn", model=model, detail=obs.preview(last, 120))
             await asyncio.sleep(2.5 * (attempt + 1))
             try:
                 await self.unload(model)
@@ -270,15 +281,7 @@ class OllamaProvider:
 
         do_verify = (config.VERIFY_MATH if verify is None else verify)
         if do_verify and prompts.looks_mathematical(data.get("question", "")):
-            second = await self._read_once(image_b64, prompts.VERIFY_USER, temp=0.0)
-            a = prompts.normalise_for_compare(data.get("question", ""))
-            b = prompts.normalise_for_compare(second.get("question", ""))
-            data["verified"] = True
-            if a != b and b:
-                data["alternative"] = second["question"]
-                data["disagreement"] = True
-                # the two readings differ, so neither deserves high confidence
-                data["confidence"] = min(data.get("confidence", 0.0), 0.45)
+            data = prompts.merge_readings(data, await self.reread(image_b64))
 
         data.update({
             "latency_s": round(time.perf_counter() - t0, 2),
@@ -286,6 +289,10 @@ class OllamaProvider:
             "stage": "vision",
         })
         return data
+
+    async def reread(self, image_b64: str) -> dict:
+        """An independent second reading, used by the Verifier agent."""
+        return await self._read_once(image_b64, prompts.VERIFY_USER, temp=0.0)
 
     # -- stage 2: reasoning ------------------------------------------------
     def solve(self, question: str, subject: str = "") -> AsyncIterator[str]:
