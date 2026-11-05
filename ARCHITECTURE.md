@@ -41,3 +41,19 @@ Practice outcomes are chosen by the student (knew it / needed a hint / needed th
 answer). Status and recall change by fixed rules in `routers/practice.py`. A
 friend's imported notes start with zero progress, so they cannot inflate
 readiness.
+
+## Diagrams: the model writes relationships, never drawing code
+The model emits an edge list (`@@DIAGRAM ... @@END`), which the backend parses
+into validated structure - ids, labels, shapes, edges, with caps - and infers
+the kind from the graph's shape (flowchart, cycle, labelled figure, hierarchy,
+block). React does all the drawing. Nothing that fails to parse into a sensible
+graph reaches the UI: it degrades to text. The same holds for tables.
+
+This is constraint 2 applied to pictures: a model that emitted SVG, or Mermaid
+for a library to render, would be controlling the notebook's appearance.
+
+## Voice and speech stay on the machine
+Transcription runs in a whisperflow sidecar on localhost; audio never leaves.
+Reading answers aloud uses the browser's own local voices (voices marked as
+network ones are not used). Neither is a cloud service, so neither needs the
+consent gate that Gemini and web search have.

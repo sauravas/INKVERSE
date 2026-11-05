@@ -143,6 +143,55 @@ Mastered, with important flags and active-recall logging. EXAM READY appears onl
 when syllabus coverage, important-question mastery and recall accuracy all clear
 their thresholds, and every failure is listed as a named blocker.
 
+### Answers are written, not typed out
+
+An answer arrives as steps written in handwriting on the ruled lines, with
+mathematics typeset by KaTeX. Where a topic has a shape - an architecture, a
+flow, a cycle, the parts of one thing - the tutor draws it, by hand: sketched
+boxes, wobbly arrows, handwritten labels, drawn in the order a person would
+draw them. Comparisons come out as hand-ruled tables. Everything sits on the
+lines: a diagram, a fraction and a table each take a whole number of ruled
+lines, so the writing after them lands back on the rule.
+
+Tap a block in a diagram, or circle anything on the page, to ask about it.
+
+### Asking out loud
+
+Tap the microphone and talk. The words appear on the lines as you speak, a
+pause ends the question, and it solves itself two seconds later unless you
+change it. Answers to spoken questions are read back aloud, with the
+mathematics turned into words ("x squared plus or minus the square root of
+b squared minus 4ac"); a toggle reads every answer.
+
+Speech is transcribed on this machine by
+[whisper-flow](https://github.com/dimastatz/whisper-flow) running as a
+sidecar, using its bundled `tiny.en` model. `start.ps1` sets it up on first
+run if Python 3.11 or 3.12 is installed; `-NoVoice` skips it, and everything
+else still works. Microphones need a secure page, so use
+<http://localhost:8000> on the laptop (the phone, on a LAN address, cannot
+record).
+
+### Circle to ask, and follow-ups
+
+Press **Circle to ask** and draw a loop around a diagram block, a formula, a
+table entry or a few words. INKWISE works out what you enclosed and asks the
+tutor about exactly that; the loop stays on the page in red pencil. Each step
+also has one-tap asks - *Simpler, please*, *Another method*, *Why this
+formula?*, *Common mistakes* - and every answer becomes a thread in the
+margin, so a follow-up like "why not the other way round?" knows what was
+just said.
+
+### Notes
+
+The **Notes** tab holds one set of prepared notes per module, written from
+that module's imported syllabus and its question bank: each topic a section,
+with diagrams and tables where they help, ending in the points to remember.
+
+Select words to highlight them or ask about them. Switch on **Write on the
+notes** to annotate with a pen, and draw a loop round anything to ask about
+it. Explanations appear in the margin beside the section they belong to.
+Highlights, ink and questions are all kept.
+
 ### Two notebooks
 
 **Notebook** is the free page: write any question, solve it, annotate it.
@@ -178,11 +227,12 @@ Everything imported is indexed (SQLite FTS5, BM25 - no extra model on the GPU),
 and answers, hints and step explanations for questions in that subject are
 **grounded in your own material**. Each answer shows which module notes it used.
 
-### Notes, and sharing them
+### Sharing your answer book
 
-Each module's **Notes** collect the question, your handwritten answer, the hint,
-the worked answer and your margin annotations, in order - your revision notes.
-*Print / PDF* gives a clean printout.
+Each module's **My answers** collects the question, your handwritten answer,
+the hint, the worked answer and your margin annotations, in order - your own
+answer book, separate from the prepared notes. *Print / PDF* gives a clean
+printout.
 
 *Share with friends* makes a read-only link with a QR code for anyone on the same
 Wi-Fi, which you can turn off at any time. Not on the same network? *Export file*
@@ -218,6 +268,8 @@ backend/app/
     parser.py      model stream -> typed events
     prompts.py
   ingest.py        text extraction (PDF/DOCX/images via Tesseract) + parser
+  speech.py        relay to the whisperflow voice sidecar
+  ai/diagram.py    edge lists -> validated diagram structure
   retrieval.py     FTS5 grounding in imported material
   websearch.py     optional Wikipedia / DuckDuckGo lookup
   routers/         ai, study, notebook, pair, imports, practice, notes
@@ -225,8 +277,12 @@ frontend/src/
   lib/ink.js       stroke geometry, pressure, rendering, PNG export
   lib/sync.js      WebSocket client with backoff
   lib/api.js       REST + typed-event streaming
-  components/      InkCanvas, AnswerSheet, StepTools, PenTools, MiniPad,
-                   PracticeView, ImportView, NotesView, Dashboard, PairPanel
+  lib/circle.js    what a drawn loop encloses
+  lib/speak.js     reading answers aloud, LaTeX -> words
+  components/      InkCanvas, AnswerSheet, HandDiagram, HandTable, StepTools,
+                   NotesStudy, PracticeView, ImportView, NotesView, MicButton,
+                   LinedInput, PenTools, MiniPad, Dashboard, PairPanel
+speech/.venv/      whisperflow sidecar (its own Python; not in git)
 bench/             benchmarks and end-to-end tests
 ```
 
@@ -248,11 +304,18 @@ With the backend running on :8000:
 node frontend\phase2-e2e.mjs                             # browser: import -> answer -> share
 node frontend\test-strokes.mjs                           # browser: pen strokes reach the server
 node frontend\gap-check.mjs                              # browser: answer follows the question
+node frontend\wrap-check.mjs                             # browser: words never split across lines
+node frontend\blocks-gallery.mjs                         # browser: every diagram kind + a table
+node frontend\circle-e2e.mjs                             # browser: circle a block/formula/word
 
 # need Ollama (slow)
 .\.venv\Scripts\python.exe bench\test_pipeline.py        # handwriting -> answer -> explanation
 .\.venv\Scripts\python.exe bench\test_hint_live.py       # hint helps without giving it away
 .\.venv\Scripts\python.exe bench\test_web_live.py        # web grounding (needs internet)
+.\.venv\Scripts\python.exe bench\test_voice_relay.py     # voice: browser -> whisperflow -> text
+.\.venv\Scripts\python.exe bench\test_resilience_live.py # recovers from Ollama down / low memory
+node frontend\notes-e2e.mjs                              # notes: prepare, highlight, ink, ask
+node frontend\voice-e2e.mjs <wav>                        # voice in a real browser
 ```
 
 ---
@@ -279,6 +342,15 @@ in the review box before solving, or switch to the `heavy` provider.
 `C:\Program Files\Tesseract-OCR`. Install it (the UB Mannheim build), or set
 `INKWISE_TESSERACT` to the full path of `tesseract.exe`. Text PDFs, DOCX and TXT
 import without it.
+
+**The microphone button says voice is unavailable.** Either the sidecar is not
+installed (run `.\start.ps1` once, with Python 3.11 or 3.12 present), or the
+page is not a secure context - use <http://localhost:8000>, not the LAN
+address. The first voice request takes a few seconds while the model loads.
+
+**An answer says it used the smaller model.** The text model would not have fit
+in free memory, so INKWISE answered with the vision model rather than failing.
+Close some applications and ask again for the full answer.
 
 **A friend cannot open a share link.** Same rules as the phone: the same Wi-Fi,
 and port 8000 allowed through the firewall on private networks. Otherwise send
