@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import AgentRails from './components/AgentRails'
 import AnswerSheet, {
   RichText, stepToText, stepsFromEvents, stepsToText,
 } from './components/AnswerSheet'
@@ -28,6 +29,7 @@ export default function App() {
   const sync = useWorkspace(room, 'laptop')
   const canvas = useRef(null)
   const sheetRef = useRef(null)
+  const deskRef = useRef(null)   // the desk around the page hosts the agent rails
 
   const [view, setView] = useState('notebook')
   const [tool, setTool] = useState('pen')
@@ -269,6 +271,9 @@ export default function App() {
             </div>
           )}
 
+          {/* the desk: page in the middle, agent graph and log in the margins */}
+          <div ref={deskRef} className="relative flex min-h-0 flex-1 flex-col">
+          <AgentRails hostRef={deskRef} provider={provider} />
           {/* the notebook: question written on top, answer written below it */}
           <div ref={sheetRef}
                className="scroll-thin min-h-0 flex-1 overflow-y-auto bg-[#eceadf] py-5">
@@ -337,6 +342,7 @@ export default function App() {
                 )}
               </div>
             </div>
+          </div>
           </div>
 
           <PageStrip pages={pages} active={active} canvas={canvas} />
