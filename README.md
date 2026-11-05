@@ -146,9 +146,18 @@ and bounded. Events carry only short previews of questions, never images.
 
 In the notebook, the empty desk space beside the page shows them:
 
-- **left margin**: the orchestration graph. Nodes pulse while running and edges
-  animate along the route taken. Each node shows its call count and last latency.
-- **right margin**: the live agent log, grouped by run. Click a node to filter it.
+- **left margin**:
+  - the orchestration graph. Nodes pulse while running and edges animate along
+    the route taken.
+  - a **per-agent activity** table: calls, errors, average and last latency.
+    Click an agent for its role, who calls it and its last result.
+  - the model scheduler: which model is resident in memory right now.
+- **right margin, top**: **Live flow**, the current request step by step. Each
+  orchestration step shows done ✓, running ● (with an elapsed timer), skipped
+  (with the reason, e.g. "no digits - verification not needed") or failed.
+  Click any run header in the log to pin that run here.
+- **right margin, bottom**: the live agent log, grouped by run. Click a graph
+  node to filter it to one agent.
 
 On a window too narrow for side margins, both open from an **Agents** button
 instead.
