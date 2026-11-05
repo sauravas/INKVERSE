@@ -140,6 +140,47 @@ Rules:
 - Never put LaTeX in the @@STEP title line.
 - No markdown headings, no bullets with *, no code fences.
 - Keep each step to one idea a student can follow.
+
+Diagrams: when the answer describes a structure, architecture, block diagram,
+process flow, cycle, pipeline, state transitions or hierarchy, draw it inside
+the step it belongs to, then explain each block in that step's text:
+
+@@DIAGRAM <short title>
+direction: LR
+<Block A> -> <Block B> : <what passes between them>
+<Block B> -> <Block C>
+@@END
+
+- One relationship per line, written with ->. The ": label" part is optional.
+- Block names are 1 to 4 words and are written the same way every time.
+- Use direction: LR for left-to-right flows, TB for top-to-bottom layers.
+- At most one diagram per step, and no diagrams for pure calculations.
+- Flowchart (an algorithm or procedure): begin with Start and finish with End;
+  write a decision as an id with braces, then its yes/no branches:
+    Start -> D{Is n > 1?}
+    D -> Check divisors : yes
+    D -> Print not prime : no
+- Cycle (a repeating process): list each stage once and close the loop back to
+  the first stage.
+- Labelled figure (the parts of one thing): ONE diagram that lists EVERY part,
+  placed in the first step - never one small diagram per part. The whole is on
+  the left of every line, each part on the right, what it does as the label:
+    @@DIAGRAM Parts of a CPU
+    CPU -> ALU : arithmetic and logic
+    CPU -> Control Unit : decodes instructions
+    CPU -> Registers : fastest storage
+    @@END
+  Later steps then explain the parts in words, without drawing them again.
+- Never draw a diagram that is a single arrow between two blocks; say it in words.
+
+Tables: for a comparison or a list of properties, use a table instead of prose:
+
+| Aspect | Process | Thread |
+|---|---|---|
+| Memory | Separate | Shared |
+
+- First row is the header, then a |---| row, then one row per point.
+- Keep cells short; LaTeX is allowed inside cells.
 """
 
 SOLVE_SYSTEM = (
@@ -151,7 +192,7 @@ SOLVE_SYSTEM = (
 
 SOLVE_USER = """Solve this examination question.
 
-{subject_line}{context_block}Question:
+{subject_line}{context_block}{session_block}Question:
 {question}
 
 Requirements:
@@ -174,7 +215,7 @@ The full solution that was given:
 
 The student has selected this step:
 "{step}"
-
+{history_block}
 Their follow-up question about that step:
 "{ask}"
 
@@ -200,6 +241,37 @@ HINT_USER = """{context_block}The student is stuck on this question:
 
 Give one hint that points them at the right idea without solving it.
 """
+
+
+def history_block(turns: list[dict]) -> str:
+    """Earlier questions and answers about the same step, oldest first, so a
+    follow-up like "why not the other way?" has something to refer to."""
+    lines = []
+    for t in (turns or [])[-4:]:
+        q = str(t.get("ask") or "").strip()
+        a = str(t.get("answer") or "").strip()
+        if q and a:
+            lines.append(f"Student: {q}\nTutor: {a[:1200]}")
+    if not lines:
+        return ""
+    return ("\nWhat has already been discussed about this step (do not repeat it; "
+            "build on it):\n" + "\n\n".join(lines) + "\n")
+
+
+def session_block(turns: list[dict]) -> str:
+    """Earlier questions in this sitting, so "now integrate that" or "what if
+    n were 5?" can be understood. Ignored when the new question stands alone."""
+    lines = []
+    for t in (turns or [])[-3:]:
+        q = str(t.get("question") or "").strip()
+        a = str(t.get("answer") or "").strip()
+        if q:
+            lines.append(f"Q: {q[:400]}" + (f"\nResult: {a[:400]}" if a else ""))
+    if not lines:
+        return ""
+    return ("Earlier in this study session (use this only if the new question "
+            "refers back to it, e.g. 'that', 'it', 'the previous result'):\n"
+            + "\n\n".join(lines) + "\n\n")
 
 
 def context_block(text: str) -> str:

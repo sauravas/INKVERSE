@@ -93,21 +93,23 @@ class GeminiProvider:
         })
         return data
 
-    def solve(self, question: str, subject: str = "",
-              context: str = "") -> AsyncIterator[str]:
+    def solve(self, question: str, subject: str = "", context: str = "",
+              session: list | None = None) -> AsyncIterator[str]:
         sl = f"Subject: {subject}\n\n" if subject else ""
         return self._stream(prompts.SOLVE_SYSTEM,
                             [{"text": prompts.SOLVE_USER.format(
                                 question=question, subject_line=sl,
-                                context_block=prompts.context_block(context))}],
+                                context_block=prompts.context_block(context),
+                                session_block=prompts.session_block(session or []))}],
                             max_tokens=2048)
 
     def explain(self, question: str, answer: str, step: str, ask: str,
-                context: str = "") -> AsyncIterator[str]:
+                context: str = "", history: list | None = None) -> AsyncIterator[str]:
         return self._stream(prompts.EXPLAIN_SYSTEM,
                             [{"text": prompts.EXPLAIN_USER.format(
                                 question=question, answer=answer[:6000],
                                 step=step, ask=ask,
+                                history_block=prompts.history_block(history or []),
                                 context_block=prompts.context_block(context))}],
                             max_tokens=900)
 

@@ -22,3 +22,15 @@ class AIProvider(Protocol):
 
 class ProviderError(RuntimeError):
     pass
+
+
+class InsufficientMemory(ProviderError):
+    """Loading the model would starve the machine (raised before any output)."""
+
+
+class Notice(str):
+    """A message for the student, yielded in-band by a provider stream.
+
+    The router turns it into a typed "notice" event; it never reaches the
+    answer parser, so it cannot end up written into the answer.
+    """

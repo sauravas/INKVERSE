@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from .. import config, db, imaging, resources, retrieval, websearch
 from ..ai import registry
-from ..ai.base import ProviderError
+from ..ai.base import Notice, ProviderError
 from ..ai.parser import StepStreamParser, events_to_steps
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
@@ -39,6 +39,8 @@ class SolveIn(BaseModel):
     consent_cloud: bool = False
     # also look the question up on the web; sends its text to Wikipedia/DDG
     web: bool = False
+    # earlier questions in this sitting: [{"question": ..., "answer": ...}]
+    session: list[dict] = []
 
 
 class HintIn(BaseModel):
@@ -57,6 +59,8 @@ class ExplainIn(BaseModel):
     step_index: int | None = None
     ask: str = ""
     ask_image: str | None = None
+    # earlier turns about this same step: [{"ask": ..., "answer": ...}]
+    history: list[dict] = []
     question_id: str | None = None
     provider: str | None = None
     consent_cloud: bool = False
@@ -128,6 +132,10 @@ async def _stream_events(agen, *, on_done=None, sources=None, notices=None):
         for note in notices or []:
             yield _sse({"type": "notice", "message": note})
         async for chunk in agen:
+            if isinstance(chunk, Notice):
+                # e.g. "answering with the smaller model": shown, never parsed
+                yield _sse({"type": "notice", "message": str(chunk)})
+                continue
             if first is None:
                 first = round(time.perf_counter() - t0, 2)
                 yield _sse({"type": "first_token", "ttft_s": first})
@@ -181,7 +189,7 @@ async def solve(body: SolveIn, request: Request):
         else:
             notices.append(f"No web results ({w.get('error') or 'none found'}); "
                            "answering from the local model alone.")
-    agen = p.solve(body.question, body.subject, context)
+    agen = p.solve(body.question, body.subject, context, body.session)
     return StreamingResponse(
         _stream_events(agen, on_done=persist, sources=used, notices=notices),
         media_type="text/event-stream",
@@ -219,7 +227,8 @@ async def explain(body: ExplainIn):
                    (json.dumps(steps), eid))
 
     context, used = retrieval.context_for(f"{ask}\n{body.step}", body.question_id)
-    agen = p.explain(body.question, body.answer, body.step, ask, context)
+    agen = p.explain(body.question, body.answer, body.step, ask, context,
+                     body.history)
 
     async def gen():
         yield _sse({"type": "ask", "value": ask, "explanation_id": eid})

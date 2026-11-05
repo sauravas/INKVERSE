@@ -12,14 +12,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import shutil
+import subprocess
 import time
+from pathlib import Path
 from typing import AsyncIterator
 
 import httpx
 
 from .. import config, resources
 from . import prompts
-from .base import ProviderError
+from .base import InsufficientMemory, Notice, ProviderError
 
 
 class OllamaProvider:
@@ -106,6 +110,60 @@ class OllamaProvider:
         return {"vision": self.vision_model, "text": self.text_model,
                 "staged": self.staged}
 
+    _start_lock = asyncio.Lock()
+    _last_start = 0.0
+
+    async def _alive(self) -> bool:
+        try:
+            async with httpx.AsyncClient(timeout=3) as c:
+                return (await c.get(f"{self.url}/api/version")).status_code == 200
+        except httpx.RequestError:
+            return False
+
+    async def _ensure_server(self) -> bool:
+        """Start Ollama if it is not running, and wait until it answers.
+
+        On this laptop the Ollama server has been seen to exit mid-session.
+        Rather than fail every request until someone restarts it by hand, start
+        it again: the desktop app where installed (it keeps a server log), else
+        `ollama serve`. At most once a minute, and only on this machine.
+        """
+        if await self._alive():
+            return True
+        if not config.AUTOSTART_OLLAMA or not self.url.startswith(
+                ("http://127.0.0.1", "http://localhost")):
+            return False
+        async with OllamaProvider._start_lock:
+            if await self._alive():
+                return True
+            if time.monotonic() - OllamaProvider._last_start > 60:
+                OllamaProvider._last_start = time.monotonic()
+                exe = shutil.which("ollama")
+                if not exe:
+                    return False
+                app = Path(exe).with_name("ollama app.exe")
+                cmd = [str(app)] if app.is_file() else [exe, "serve"]
+                flags = 0
+                if os.name == "nt":
+                    flags = (subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+                             | subprocess.CREATE_NO_WINDOW)
+                subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, creationflags=flags,
+                                 close_fds=True)
+            for _ in range(60):                      # up to ~30 s to come up
+                await asyncio.sleep(0.5)
+                if await self._alive():
+                    self._sizes = {}                 # sizes may have changed
+                    return True
+        return False
+
+    async def _wait_gone(self, model: str, timeout: float = 6.0):
+        """After an unload, wait until the model has really left memory."""
+        end = time.monotonic() + timeout
+        while time.monotonic() < end and model in await self._loaded():
+            await asyncio.sleep(0.25)
+        await asyncio.sleep(0.4)          # give Windows a moment to reclaim pages
+
     async def _exclusive(self, model: str):
         """Keep only one stage resident at a time.
 
@@ -121,11 +179,17 @@ class OllamaProvider:
             return
         if other in await self._loaded():
             await self.unload(other)
+            # measuring free memory before the eviction lands would make the
+            # RAM guard refuse a model that actually fits
+            await self._wait_gone(other)
 
     async def _guard(self, model: str):
         """Refuse to load a model that would starve the machine."""
         if not config.RAM_GUARD:
             return
+        if not await self._ensure_server():
+            # with Ollama down, a memory verdict would be about the wrong thing
+            raise ProviderError(resources.serve_hint())
         if model in await self._loaded():
             return                       # already resident, no new allocation
         if not self._sizes:
@@ -138,7 +202,7 @@ class OllamaProvider:
             return
         ok, msg = resources.check(size, config.MIN_FREE_RAM_GB)
         if not ok:
-            raise ProviderError(msg)
+            raise InsufficientMemory(msg)
 
     async def unload(self, model: str | None = None) -> dict:
         """Evict a model from memory immediately."""
@@ -223,6 +287,8 @@ class OllamaProvider:
                     raise ProviderError(
                         resources.serve_hint() if resources.ollama_installed()
                         else f"Cannot reach Ollama at {self.url}: {e}") from e
+                if isinstance(e, httpx.ConnectError) and await self._ensure_server():
+                    continue                  # the server is back: retry at once
 
             # The runner died before emitting anything. On this hardware
             # (shared-memory iGPU) the crash is often a transient driver fault
@@ -321,30 +387,52 @@ class OllamaProvider:
         return data
 
     # -- stage 2: reasoning ------------------------------------------------
-    def solve(self, question: str, subject: str = "",
-              context: str = "") -> AsyncIterator[str]:
+    async def _text(self, messages, **kw) -> AsyncIterator[str]:
+        """Run a text stage; if the text model will not fit, use the small one.
+
+        A shorter answer from the small model is more use to a student than an
+        error. The switch happens before any output (the RAM guard runs first),
+        and the student is told which model answered.
+        """
+        try:
+            async for piece in self._stream_chat(self.text_model, messages, **kw):
+                yield piece
+            return
+        except InsufficientMemory as e:
+            fallback = self.vision_model
+            if not (config.LOW_MEMORY_FALLBACK and self.staged and fallback != self.text_model):
+                raise
+            why = str(e).split(". ")[0]
+        yield Notice(f"{why}. Answering with the smaller {fallback} model instead, so "
+                     "this may be less thorough - close some apps and ask again for "
+                     "the full answer.")
+        async for piece in self._stream_chat(fallback, messages, **kw):
+            yield piece
+
+    def solve(self, question: str, subject: str = "", context: str = "",
+              session: list | None = None) -> AsyncIterator[str]:
         sl = f"Subject: {subject}\n\n" if subject else ""
-        return self._stream_chat(
-            self.text_model,
+        return self._text(
             [{"role": "system", "content": prompts.SOLVE_SYSTEM},
              {"role": "user", "content": prompts.SOLVE_USER.format(
                  question=question, subject_line=sl,
-                 context_block=prompts.context_block(context))}],
+                 context_block=prompts.context_block(context),
+                 session_block=prompts.session_block(session or []))}],
             num_predict=2048, temp=0.3, think=False)
 
     def explain(self, question: str, answer: str, step: str,
-                ask: str, context: str = "") -> AsyncIterator[str]:
-        return self._stream_chat(
-            self.text_model,
+                ask: str, context: str = "",
+                history: list | None = None) -> AsyncIterator[str]:
+        return self._text(
             [{"role": "system", "content": prompts.EXPLAIN_SYSTEM},
              {"role": "user", "content": prompts.EXPLAIN_USER.format(
                  question=question, answer=answer[:6000], step=step, ask=ask,
+                 history_block=prompts.history_block(history or []),
                  context_block=prompts.context_block(context))}],
             num_predict=900, temp=0.3, think=False)
 
     def hint(self, question: str, context: str = "") -> AsyncIterator[str]:
-        return self._stream_chat(
-            self.text_model,
+        return self._text(
             [{"role": "system", "content": prompts.HINT_SYSTEM},
              {"role": "user", "content": prompts.HINT_USER.format(
                  question=question, context_block=prompts.context_block(context))}],
