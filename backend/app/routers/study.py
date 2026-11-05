@@ -6,8 +6,8 @@ import json
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from .. import db
-from ..readiness import STATUSES, subject_report
+from .. import agents, db, obs
+from ..readiness import STATUSES
 
 router = APIRouter(prefix="/api/study", tags=["study"])
 
@@ -229,11 +229,15 @@ async def dashboard(subject_id: str | None = None):
         db.rows("SELECT * FROM subjects ORDER BY created_at")
 
     reports = []
-    for s in subs:
-        mods = db.rows("SELECT * FROM modules WHERE subject_id=? "
-                       "ORDER BY position, created_at", (s["id"],))
-        qs = db.rows("SELECT * FROM questions WHERE subject_id=?", (s["id"],))
-        reports.append(subject_report(s, mods, qs))
+    with obs.trace("dashboard", f"Dashboard opened - {len(subs)} subject(s)"):
+        if subs:
+            obs.emit("route", "Routing each subject to Mentor (rules, no model)",
+                     to="mentor")
+        for s in subs:
+            mods = db.rows("SELECT * FROM modules WHERE subject_id=? "
+                           "ORDER BY position, created_at", (s["id"],))
+            qs = db.rows("SELECT * FROM questions WHERE subject_id=?", (s["id"],))
+            reports.append(agents.mentor(s, mods, qs))
 
     unfiled = db.one("SELECT COUNT(*) n FROM questions WHERE subject_id IS NULL")["n"]
     overall = {

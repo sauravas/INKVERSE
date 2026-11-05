@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import config, db, resources
 from .routers import ai, notebook, pair, study
+from .routers import obs as obs_router
 from .ws import hub
 
 
@@ -31,6 +32,7 @@ app.include_router(ai.router)
 app.include_router(study.router)
 app.include_router(notebook.router)
 app.include_router(pair.router)
+app.include_router(obs_router.router)
 
 
 @app.get("/api/status")
