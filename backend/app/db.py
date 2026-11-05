@@ -106,6 +106,31 @@ CREATE TABLE IF NOT EXISTS shares (
 
 -- retrieval index over imported material (BM25, no embedding model needed,
 -- so grounding never competes with the vision/text models for GPU memory)
+-- prepared study notes: one set per module, written as structured steps
+CREATE TABLE IF NOT EXISTS study_notes (
+  id TEXT PRIMARY KEY,
+  subject_id TEXT REFERENCES subjects(id) ON DELETE CASCADE,
+  module_id TEXT UNIQUE REFERENCES modules(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  steps_json TEXT NOT NULL DEFAULT '[]',
+  created_at REAL NOT NULL,
+  updated_at REAL NOT NULL
+);
+
+-- what the student did to their notes: highlights, pen ink, and questions
+-- asked about a passage (with the explanation, so the thread survives)
+CREATE TABLE IF NOT EXISTS note_marks (
+  id TEXT PRIMARY KEY,
+  note_id TEXT NOT NULL REFERENCES study_notes(id) ON DELETE CASCADE,
+  section_index INTEGER NOT NULL,
+  kind TEXT NOT NULL,                      -- highlight|ink|question
+  quote TEXT,
+  ask TEXT,
+  data TEXT,                               -- ink strokes, or answer steps
+  created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_marks_note ON note_marks(note_id);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks USING fts5(
   text, heading, source_id UNINDEXED, subject_id UNINDEXED,
   module_id UNINDEXED, tokenize = 'porter unicode61'

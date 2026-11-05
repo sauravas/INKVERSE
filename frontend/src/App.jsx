@@ -3,6 +3,7 @@ import AnswerSheet, { RichText, stepToText, stepsToText } from './components/Ans
 import CircleLayer, { CircleToggle } from './components/CircleLayer'
 import Dashboard from './components/Dashboard'
 import ImportView from './components/ImportView'
+import NotesStudy from './components/NotesStudy'
 import InkCanvas from './components/InkCanvas'
 import LinedInput from './components/LinedInput'
 import MicButton from './components/MicButton'
@@ -20,7 +21,7 @@ const ROOM_KEY = 'inkwise.room'
 const WEB_KEY = 'inkwise.web'
 const SPEAK_KEY = 'inkwise.speak'
 const VIEWS = [
-  ['notebook', 'Notebook'], ['practice', 'Question bank'],
+  ['notebook', 'Notebook'], ['notes', 'Notes'], ['practice', 'Question bank'],
   ['dashboard', 'Dashboard'], ['import', 'Import'],
 ]
 // question-bank answer pages live in the same workspace, prefixed with q-
@@ -297,6 +298,8 @@ export default function App() {
           setView('notebook')
         }} />
       )}
+
+      {view === 'notes' && <NotesStudy ai={ai} />}
 
       {view === 'import' && (
         <ImportView onPractise={() => setView('practice')} />

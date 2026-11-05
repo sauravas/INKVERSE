@@ -97,6 +97,13 @@ export const api = {
   exportUrl: (q) => `/api/notes/export?${new URLSearchParams(q)}`,
   importBundle: (bundle, sharedBy) =>
     post('/api/notes/import', { bundle, shared_by: sharedBy || null }),
+
+  // --- prepared study notes ------------------------------------------------
+  noteModules: () => get('/api/study-notes/modules'),
+  studyNotes: (mid) => get(`/api/study-notes/${mid}`),
+  addMark: (noteId, b) => post(`/api/study-notes/notes/${noteId}/marks`, b),
+  updateMark: (id, data) => patch(`/api/study-notes/marks/${id}`, { data }),
+  deleteMark: (id) => del(`/api/study-notes/marks/${id}`),
 }
 
 /**

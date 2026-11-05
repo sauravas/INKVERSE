@@ -432,6 +432,15 @@ class OllamaProvider:
                  context_block=prompts.context_block(context))}],
             num_predict=900, temp=0.3, think=False)
 
+    def notes(self, subject: str, module: str, material: str = "",
+              questions: list | None = None) -> AsyncIterator[str]:
+        mb, qb = prompts.notes_material(material, questions or [])
+        return self._text(
+            [{"role": "system", "content": prompts.NOTES_SYSTEM},
+             {"role": "user", "content": prompts.NOTES_USER.format(
+                 subject=subject, module=module, material_block=mb, questions_block=qb)}],
+            num_predict=2600, temp=0.3, think=False)
+
     def hint(self, question: str, context: str = "") -> AsyncIterator[str]:
         return self._text(
             [{"role": "system", "content": prompts.HINT_SYSTEM},

@@ -152,7 +152,7 @@ function Picker({ subjects, report, onStart, onNotes, onImport, onReload }) {
                       <button onClick={() => onNotes({ ...m, subject: s })}
                               className="rounded-lg border border-black/15 px-3 py-1.5 text-sm
                                          hover:bg-black/5">
-                        Notes
+                        My answers
                       </button>
                       <button onClick={() => onStart({ ...m, subject: s })}
                               className="rounded-lg bg-accent px-3 py-1.5 text-sm text-white">
@@ -333,7 +333,7 @@ function Session({ module, sync, ai, pen, onExit, onNotes }) {
           </div>
           <div className="mt-5 flex justify-center gap-2">
             <button onClick={onNotes} className="rounded-lg bg-ink px-3 py-2 text-sm text-white">
-              Open the notes
+              See my answers
             </button>
             <button onClick={() => setIdx(0)}
                     className="rounded-lg border border-black/15 px-3 py-2 text-sm">
@@ -374,7 +374,7 @@ function Session({ module, sync, ai, pen, onExit, onNotes }) {
         <span className="tabular-nums text-ink-soft">{idx + 1}/{list.questions.length}</span>
         <button onClick={() => { saveWork(); onNotes() }}
                 className="rounded-lg border border-black/15 px-2.5 py-1 hover:bg-black/5">
-          Notes
+          My answers
         </button>
       </div>
 

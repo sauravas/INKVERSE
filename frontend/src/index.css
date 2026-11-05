@@ -191,3 +191,6 @@ html, body, #root {
 }
 .hand-table th { font-variation-settings: 'wght' 640; color: var(--color-accent); }
 @keyframes ink-reveal { to { clip-path: inset(0 0 0 0); } }
+
+/* highlighter on handwritten notes (CSS Custom Highlight API, see lib/highlight.js) */
+::highlight(ink-highlight) { background-color: rgba(253, 224, 71, 0.55); color: inherit; }

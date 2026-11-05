@@ -151,14 +151,14 @@ export function threadsFromRows(rows) {
   return out
 }
 
-export function MarginNote({ index, turns, ex, onFollowUp }) {
+export function MarginNote({ index, turns, ex, onFollowUp, heading }) {
   const list = turns || (ex ? [ex] : [])
   const [text, setText] = useState('')
   const busy = list.some((t) => t.streaming)
   return (
     <div className="ml-6 rounded-lg border-l-4 border-amber-400 bg-amber-50/60 px-4">
       <div className="lined-row text-[11px] font-medium uppercase tracking-wide text-amber-900/80">
-        About step {index}
+        {heading || `About step ${index}`}
       </div>
       {list.map((t, i) => (
         <div key={i}>

@@ -243,6 +243,36 @@ Give one hint that points them at the right idea without solving it.
 """
 
 
+NOTES_SYSTEM = (
+    "You write concise, exam-oriented study notes for a university module. "
+    "Each topic is one section. In each section give the definition, the key "
+    "idea in plain words, the important formulas, and what examiners ask about "
+    "it. Draw a diagram where the topic is a structure, process or cycle, and "
+    "use a table for comparisons. End with the points to remember.\n\n" + _BLOCK_RULES
+    + "\nFor notes: each @@STEP title is the topic name. @@FINAL holds the key "
+    "points to remember, one per line, numbered 1., 2., 3.\n"
+)
+
+NOTES_USER = """Write study notes for this module.
+
+Subject: {subject}
+Module: {module}
+{material_block}{questions_block}Cover the topics a student is examined on in this module, in a sensible
+teaching order. Be accurate and compact: these are notes to revise from, not
+a textbook chapter.
+"""
+
+
+def notes_material(material: str, questions: list[str]) -> tuple[str, str]:
+    m = (material or "").strip()
+    mb = (f"Syllabus and reference material for this module (follow its scope "
+          f"and notation):\n{m[:4000]}\n\n") if m else ""
+    qs = [q.strip() for q in questions if q and q.strip()][:25]
+    qb = ("Questions students are asked on this module (the notes must equip "
+          "them to answer these):\n" + "\n".join(f"- {q[:200]}" for q in qs) + "\n\n") if qs else ""
+    return mb, qb
+
+
 def focus_block(focus: str) -> str:
     """What the student circled inside the step, so the answer is about that."""
     focus = (focus or "").strip()

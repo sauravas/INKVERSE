@@ -406,7 +406,8 @@ export default function HandDiagram({ diagram: d, animate = true, onNodeClick })
         {drawn.underline.map((p, i) => (
           <Stroke key={`u${i}`} path={p} t={at.underline.t} d={at.underline.d} animate={playing} />
         ))}
-        {onNodeClick && (
+        {/* the hint only when it will not run into the caption */}
+        {onNodeClick && L.width - capW > textWidth('tap a block to ask about it', 15) + 40 && (
           <g opacity={0.75}>
             <HandText lines={['tap a block to ask about it']} x={L.width - 12}
                       y={CAPTION_H / 2 - 4} px={15} color={PENCIL} seed={seed + 3}

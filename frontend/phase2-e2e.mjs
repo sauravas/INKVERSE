@@ -108,7 +108,7 @@ check('outcome recorded and progress advanced by rule',
   `${q1.outcome}/${q1.status}`)
 
 // ---- 4. notes, then share --------------------------------------------------
-await clickText(page, 'Notes')
+await clickText(page, 'My answers')
 await page.waitForFunction(() => document.body.innerText.includes('My answer'), { timeout: 15000 })
 check('notes show the student\'s handwritten answer',
   await page.$$eval('img[alt="handwritten answer"]', (i) => i.length) === 1)

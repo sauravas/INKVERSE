@@ -115,6 +115,15 @@ class GeminiProvider:
                                 context_block=prompts.context_block(context))}],
                             max_tokens=900)
 
+    def notes(self, subject: str, module: str, material: str = "",
+              questions: list | None = None) -> AsyncIterator[str]:
+        mb, qb = prompts.notes_material(material, questions or [])
+        return self._stream(prompts.NOTES_SYSTEM,
+                            [{"text": prompts.NOTES_USER.format(
+                                subject=subject, module=module,
+                                material_block=mb, questions_block=qb)}],
+                            max_tokens=3000)
+
     def hint(self, question: str, context: str = "") -> AsyncIterator[str]:
         return self._stream(prompts.HINT_SYSTEM,
                             [{"text": prompts.HINT_USER.format(

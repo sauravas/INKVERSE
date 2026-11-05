@@ -58,8 +58,11 @@ const measured = await page.evaluate(() => {
   return { canvasBottom: cvBox.bottom, answerTop: ansBox.top, canvasHeight: cvBox.height }
 })
 console.log('canvas height on reopen:', Math.round(measured?.canvasHeight), 'px')
-console.log('gap between writing area bottom and Answer heading:',
-  Math.round(measured?.answerTop - measured?.canvasBottom), 'px')
+// one ruled line of gap is the typed-question row that sits between them
+const gap = Math.round(measured?.answerTop - measured?.canvasBottom)
+const rule = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).fontSize) * 2)
+console.log(`gap between writing area bottom and Answer heading: ${gap}px`,
+  gap <= rule ? '(the typed-question line; OK)' : '(TOO MUCH)')
 
 await page.screenshot({ path: '../bench/shot-gapcheck.png', fullPage: true })
 console.log('page errors:', errs.length ? errs.slice(0, 3) : 'none')

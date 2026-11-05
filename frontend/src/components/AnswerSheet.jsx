@@ -64,26 +64,50 @@ function glyphStyle(seed, i) {
 
 /** Build per-character spans once; reveal by slicing the memoised array. */
 function useGlyphs(text, seed) {
+  // Glyphs are grouped into words. Each letter is its own inline-block, which
+  // the browser would otherwise treat as a break opportunity - wrapping
+  // "Waiting" as "Waitin / g". The word wrapper keeps letters together.
   return useMemo(() => {
     const out = []
+    let word = null
+    const flush = () => { if (word) { out.push(word); word = null } }
     for (let i = 0; i < text.length; i++) {
       const ch = text[i]
       if (ch === '\n') {
-        out.push(<br key={i} />)
+        flush()
+        out.push({ kind: 'br', at: i })
       } else if (ch === ' ') {
-        // a plain space keeps the DOM smaller and word spacing natural
-        out.push(' ')
+        flush()
+        out.push({ kind: 'space', at: i })
       } else {
-        out.push(<span key={i} style={glyphStyle(seed, i)}>{ch}</span>)
+        if (!word) word = { kind: 'word', at: i, chars: [] }
+        word.chars.push({ ch, i })
       }
     }
+    flush()
     return out
   }, [text, seed])
 }
 
 function HandRun({ text, seed, count }) {
-  const glyphs = useGlyphs(text, seed)
-  return <>{count >= text.length ? glyphs : glyphs.slice(0, Math.max(0, count))}</>
+  const parts = useGlyphs(text, seed)
+  const out = []
+  for (const p of parts) {
+    if (p.at >= count) break
+    if (p.kind === 'br') out.push(<br key={p.at} />)
+    else if (p.kind === 'space') out.push(' ')
+    else {
+      const shown = p.chars.filter((c) => c.i < count)
+      out.push(
+        <span key={p.at} style={{ whiteSpace: 'nowrap' }}>
+          {shown.map((c) => (
+            <span key={c.i} style={glyphStyle(seed, c.i)}>{c.ch}</span>
+          ))}
+        </span>,
+      )
+    }
+  }
+  return <>{out}</>
 }
 
 export function stepsFromEvents(events) {
@@ -200,7 +224,7 @@ function Segment({ seg, revealed, offset, onAskBlock }) {
 }
 
 const StepCard = memo(function StepCard({
-  step, offset, revealed, selected, onSelect, onAsk, onAskBlock, writing,
+  step, offset, revealed, selected, onSelect, onAsk, onAskBlock, writing, notes,
 }) {
   const total = step.segments.reduce((n, s) => n + segLen(s), 0)
   const localRevealed = revealed - offset
@@ -219,9 +243,12 @@ const StepCard = memo(function StepCard({
       <header className="lined-one flex items-baseline gap-2">
         <span className={`hand lined-text shrink-0 text-[1.45rem] ${
           step.final ? 'text-emerald-800' : 'text-accent'}`}>
-          {step.final ? 'Answer' : `Step ${step.index}`}
+          {notes
+            // in notes a section is named by its topic, not numbered as a step
+            ? (step.final ? 'Key points to remember' : step.title || `Topic ${step.index}`)
+            : (step.final ? 'Answer' : `Step ${step.index}`)}
         </span>
-        {step.title && !step.final && (
+        {step.title && !step.final && !notes && (
           // models sometimes put LaTeX in a title despite being told not to
           <RichText text={step.title}
                     className="hand lined-text min-w-0 truncate text-[1.3rem] text-ink-soft" />
@@ -252,7 +279,7 @@ const StepCard = memo(function StepCard({
 
 export default function AnswerSheet({
   steps, streaming, instant, selectedStep, onSelectStep, onAskStep, emptyHint,
-  afterStep, onAskBlock,
+  afterStep, onAskBlock, notes,
 }) {
   const offsets = useMemo(() => {
     const out = []
@@ -291,6 +318,7 @@ export default function AnswerSheet({
             onSelect={onSelectStep}
             onAsk={onAskStep}
             onAskBlock={onAskBlock}
+            notes={notes}
           />
           {afterStep?.(s)}
         </div>
