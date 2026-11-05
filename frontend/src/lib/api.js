@@ -137,7 +137,8 @@ function foldSteps(events) {
     } else if (e.type === 'segment' && cur) {
       cur.segments.push({ kind: e.kind, value: e.value, display: e.display,
                           ...(e.diagram ? { diagram: e.diagram } : {}),
-                          ...(e.table ? { table: e.table } : {}) })
+                          ...(e.table ? { table: e.table } : {}),
+                          ...(e.code ? { code: e.code } : {}) })
     }
   }
   return steps

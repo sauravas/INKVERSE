@@ -16,6 +16,10 @@ export const AGENT_COLORS = {
   explainer: '#c2410c',
   mentor: '#a16207',
   examiner: '#8a94a8',
+  librarian: '#0369a1',
+  researcher: '#b91c1c',
+  hinter: '#4d7c0f',
+  notewriter: '#7e22ce',
 }
 
 export const AGENT_SHORT = {
@@ -26,6 +30,10 @@ export const AGENT_SHORT = {
   explainer: 'Explainer',
   mentor: 'Mentor',
   examiner: 'Examiner',
+  librarian: 'Librarian',
+  researcher: 'Research',
+  hinter: 'Hint',
+  notewriter: 'Notes',
 }
 
 const MAX_EVENTS = 400

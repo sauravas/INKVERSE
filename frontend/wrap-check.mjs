@@ -10,7 +10,8 @@ await api('/api/study/questions', { method: 'POST', body: JSON.stringify({ subje
 const browser = await puppeteer.launch({ executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: 'new', args: ['--no-sandbox'] })
 const page = await browser.newPage()
 await page.setViewport({ width: 900, height: 900 })   // narrow, to force wrapping
-await page.goto(`${BASE}/?room=wrapchk`, { waitUntil: 'networkidle0' })
+await page.goto(`${BASE}/?room=wrapchk`, { waitUntil: 'domcontentloaded' })
+await new Promise((r) => setTimeout(r, 1200))
 await page.evaluate(() => document.fonts.ready)
 const click = (x, ex) => page.evaluate((x, ex) => { const b = [...document.querySelectorAll('button')].find((b) => ex ? b.textContent.trim().toLowerCase() === x : b.textContent.includes(x)); b?.click(); return !!b }, x, ex)
 await click('dashboard', true); await new Promise((r) => setTimeout(r, 900))

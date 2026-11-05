@@ -107,6 +107,14 @@ html, body, #root {
 /* Inline maths takes exactly one line box (so a fraction never pushes the
    lines below it off the rules) and is nudged so its baseline matches the
    handwriting's; tall pieces simply overhang, as they would on paper.      */
+/* A formula KaTeX could not parse, written out in words instead. It is part of
+   the answer, not an error, so it is styled like the text around it. */
+.ink-math-plain {
+  font-family: inherit;
+  font-style: italic;
+  letter-spacing: 0.01em;
+}
+
 .ink-math--tilt {
   display: inline-block;
   height: var(--rule);

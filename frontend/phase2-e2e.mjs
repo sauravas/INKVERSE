@@ -39,7 +39,7 @@ const errs = []
 page.on('pageerror', (e) => errs.push(String(e)))
 page.on('dialog', (d) => d.accept(d.type() === 'prompt' ? 'Saurav' : undefined))
 await page.goto(`${BASE}/?room=e2e${Date.now().toString(36).slice(-4)}`,
-  { waitUntil: 'networkidle0' })
+  { waitUntil: 'domcontentloaded' })
 
 // ---- 1. import through the UI --------------------------------------------
 await clickText(page, 'Import')
@@ -128,7 +128,8 @@ const friend = await browser.newPage()
 await friend.setViewport({ width: 1100, height: 900 })
 friend.on('pageerror', (e) => errs.push('friend: ' + String(e)))
 const token = shareUrl.split('/notes/')[1]
-await friend.goto(`${BASE}/notes/${token}`, { waitUntil: 'networkidle0' })
+await friend.goto(`${BASE}/notes/${token}`, { waitUntil: 'domcontentloaded' })
+await new Promise((r) => setTimeout(r, 1200))
 await friend.waitForFunction(() => document.body.innerText.includes('Differentiation'), { timeout: 15000 })
 check('friend sees the notes read-only',
   await friend.evaluate(() => document.body.innerText.includes('Download to my INKWISE')

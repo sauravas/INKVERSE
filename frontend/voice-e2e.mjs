@@ -16,7 +16,8 @@ await page.setViewport({ width: 1300, height: 900 })
 const errs = []
 page.on('pageerror', (e) => errs.push(String(e)))
 // localhost is a secure context, which getUserMedia needs
-await page.goto('http://localhost:8000/?room=voicee2e', { waitUntil: 'networkidle0' })
+await page.goto('http://localhost:8000/?room=voicee2e', { waitUntil: 'domcontentloaded' })
+await new Promise((r) => setTimeout(r, 1200))
 
 const box = () => page.$eval('textarea.lined-input', (t) => t.value)
 const t0 = Date.now()

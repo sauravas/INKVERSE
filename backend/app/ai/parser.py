@@ -13,6 +13,8 @@ from .diagram import parse_edge_list
 STEP_RE = re.compile(r"^\s*@@STEP\b[:\-]?\s*(.*)$")
 FINAL_RE = re.compile(r"^\s*@@FINAL\b[:\-]?\s*(.*)$")
 DIAGRAM_RE = re.compile(r"^\s*@@DIAGRAM\b[:\-]?\s*(.*)$")
+CODE_RE = re.compile(r"^\s*@@CODE\b[:\-]?\s*(.*)$")
+MAX_CODE_LINES = 60
 END_RE = re.compile(r"^\s*@@END\b")
 # a Markdown pipe-table row; a table needs at least two columns to count
 TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
@@ -82,6 +84,9 @@ class StepStreamParser:
         self.diagram_title = ""
         self.diagram_lines: list[str] = []
         self.table_lines: list[str] = []   # pipe-table rows awaiting their end
+        self.in_code = False          # inside @@CODE ... @@END
+        self.code_lang = ""
+        self.code_lines: list[str] = []
 
     # -- public ------------------------------------------------------------
     def feed(self, chunk: str) -> list[dict]:
@@ -101,6 +106,8 @@ class StepStreamParser:
         if self.buf.strip():
             out.extend(self._line(self.buf))
         self.buf = ""
+        if self.in_code:
+            out.extend(self._close_code())
         if self.table_lines:
             out.extend(self._close_table())
         if self.in_diagram:
@@ -158,6 +165,33 @@ class StepStreamParser:
         return [{"type": "segment", "index": self.index, "kind": "diagram",
                  "value": d["title"], "display": True, "diagram": d}]
 
+    def _close_code(self) -> list[dict]:
+        """Emit the collected lines verbatim.
+
+        Code is the one block that must not be touched on the way through: no
+        markdown stripping, no math splitting. A line like `next_node = x` is
+        valid Python and invalid LaTeX, and the whole reason this block exists
+        is that models otherwise wrap code in $$ \text{...} $$ and KaTeX fails
+        on exactly that underscore.
+        """
+        self.in_code = False
+        lines, self.code_lines = self.code_lines[:MAX_CODE_LINES], []
+        while lines and not lines[0].strip():
+            lines.pop(0)
+        while lines and not lines[-1].strip():
+            lines.pop()
+        if not lines:
+            return []
+        # drop the indentation the whole block shares, keeping relative depth
+        pad = min((len(l) - len(l.lstrip()) for l in lines if l.strip()),
+                  default=0)
+        code = "\n".join(l[pad:] if l.strip() else "" for l in lines)
+        lang = self.code_lang
+        self.code_lang = ""
+        return [{"type": "segment", "index": self.index, "kind": "code",
+                 "value": lang, "display": True,
+                 "code": {"language": lang, "text": code}}]
+
     def _text(self, value: str) -> dict:
         return {"type": "segment", "index": self.index, "kind": "text",
                 "value": value, "display": False}
@@ -165,6 +199,27 @@ class StepStreamParser:
     def _line(self, raw: str) -> list[dict]:
         out: list[dict] = []
         line = raw.rstrip("\r")
+
+        # a code block takes every line verbatim until @@END (or the next step,
+        # if the model forgets to close it)
+        if self.in_code:
+            if END_RE.match(line):
+                return self._close_code()
+            if STEP_RE.match(line) or FINAL_RE.match(line):
+                out.extend(self._close_code())
+            else:
+                self.code_lines.append(line)
+                return out
+        m = CODE_RE.match(line)
+        if m:
+            if self.table_lines:
+                out.extend(self._close_table())
+            if not self.open:
+                out.extend(self._open_step("Solution"))
+            self.in_code = True
+            self.code_lang = (m.group(1) or "").strip().lower()[:20]
+            self.code_lines = []
+            return out
 
         # the first line that is not a table row ends the table being collected
         if (self.table_lines and not self.in_diagram and not self.in_display
@@ -286,5 +341,7 @@ def events_to_steps(events: list[dict]) -> list[dict]:
                 seg["diagram"] = e["diagram"]
             if e.get("table"):
                 seg["table"] = e["table"]
+            if e.get("code"):
+                seg["code"] = e["code"]
             cur["segments"].append(seg)
     return steps

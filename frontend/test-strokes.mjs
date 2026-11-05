@@ -18,7 +18,8 @@ const page = await browser.newPage()
 await page.setViewport({ width: 1440, height: 900 })
 const errs = []
 page.on('pageerror', (e) => errs.push(String(e)))
-await page.goto(`${BASE}/?room=${ROOM}`, { waitUntil: 'networkidle0' })
+await page.goto(`${BASE}/?room=${ROOM}`, { waitUntil: 'domcontentloaded' })
+await new Promise((r) => setTimeout(r, 1200))
 await new Promise((r) => setTimeout(r, 800))
 
 const cv = await page.$('canvas.ink-surface')

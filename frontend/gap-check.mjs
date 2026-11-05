@@ -14,7 +14,7 @@ await page.setViewport({ width: 1440, height: 1200 })
 const errs = []
 page.on('pageerror', (e) => errs.push(String(e)))
 await page.goto(`${BASE}/?room=gapcheck${Date.now().toString(36).slice(-4)}`,
-  { waitUntil: 'networkidle0' })
+  { waitUntil: 'domcontentloaded' })
 await new Promise((r) => setTimeout(r, 700))
 
 const cv = await page.$('canvas.ink-surface')

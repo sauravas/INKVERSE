@@ -1,8 +1,10 @@
 import katex from 'katex'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import HandCode, { codeLength } from './HandCode'
 import HandDiagram, { diagramTimeline } from './HandDiagram'
 import HandTable, { tableTimeline } from './HandTable'
 import Snap from './Snap'
+import { looksLikeCode, texToCode, texToWords } from '../lib/mathsalvage'
 
 /**
  * Handwritten answer rendering.
@@ -30,6 +32,7 @@ function segLen(s) {
     }
     return diagramChars.get(s.diagram)
   }
+  if (s.kind === 'code' && s.code) return codeLength(s.code)
   if (s.kind === 'table' && s.table) {
     if (!diagramChars.has(s.table)) {
       diagramChars.set(s.table, Math.ceil((tableTimeline(s.table).total / 1000) * BASE_CPS))
@@ -120,7 +123,8 @@ export function stepsFromEvents(events) {
     } else if (e.type === 'segment' && cur) {
       cur.segments.push({ kind: e.kind, value: e.value, display: e.display,
                           ...(e.diagram ? { diagram: e.diagram } : {}),
-                          ...(e.table ? { table: e.table } : {}) })
+                          ...(e.table ? { table: e.table } : {}),
+                          ...(e.code ? { code: e.code } : {}) })
     }
   }
   return steps
@@ -157,26 +161,42 @@ function useWriter(total, instant) {
   return Math.floor(revealed)
 }
 
+/**
+ * One formula.
+ *
+ * throwOnError is deliberately ON. Left off, KaTeX "succeeds" at anything by
+ * rendering the source in red, so a model that wrote code as mathematics -
+ * $$\text{next_node = ...}$$, which is invalid LaTeX the moment an identifier
+ * has an underscore - produced a page of raw red markup instead of an answer.
+ * Failing loudly here means we can decide what to show instead: the code it
+ * actually was, or the formula written out in words. Never the backslashes.
+ */
 function MathSpan({ value, display }) {
-  const html = useMemo(() => {
+  const render = useMemo(() => {
     try {
-      return katex.renderToString(value, {
-        displayMode: display, throwOnError: false, strict: false,
+      return { html: katex.renderToString(value, {
+        displayMode: display, throwOnError: true, strict: false,
         trust: false, output: 'html',
-      })
+      }) }
     } catch {
-      return null
+      if (looksLikeCode(value)) {
+        const text = texToCode(value)
+        if (text) return { code: { language: '', text } }
+      }
+      return { words: texToWords(value) || value }
     }
   }, [value, display])
 
-  if (!html) {
-    return <code className="rounded bg-amber-50 px-1 text-[0.9em] text-ink-soft">{value}</code>
+  if (render.code) return <HandCode code={render.code} />
+  if (render.words) {
+    // readable, and styled as part of the answer rather than as an error
+    return <span className="ink-math-plain" title={value}>{render.words}</span>
   }
   return (
     <span
       data-tex={value}
       className={`ink-math ${display ? 'block text-center' : 'ink-math--tilt'}`}
-      dangerouslySetInnerHTML={{ __html: html }}
+      dangerouslySetInnerHTML={{ __html: render.html }}
     />
   )
 }
@@ -198,6 +218,10 @@ function Segment({ seg, revealed, offset, onAskBlock }) {
 
   if (seg.kind === 'table' && seg.table) {
     return <Snap><HandTable table={seg.table} animate={local < len} /></Snap>
+  }
+
+  if (seg.kind === 'code' && seg.code) {
+    return <Snap><HandCode code={seg.code} revealed={len ? local / len : 1} /></Snap>
   }
 
   if (seg.kind === 'math') {
@@ -400,6 +424,10 @@ export function stepToText(step) {
       const rel = s.diagram.edges.map((e) => `${name[e.from]} -> ${name[e.to]}`
         + (e.label ? ` (${e.label})` : '')).join('; ')
       return `\n[Diagram: ${s.diagram.title}. ${rel}]\n`
+    }
+    if (s.kind === 'code' && s.code) {
+      // a follow-up about this step needs the code itself, not a label
+      return `\n[${s.code.language || 'code'}]\n${s.code.text}\n`
     }
     if (s.kind === 'table' && s.table) {
       const row = (r) => `| ${r.join(' | ')} |`

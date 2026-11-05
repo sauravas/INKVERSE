@@ -37,7 +37,8 @@ await page.setViewport({ width: 1500, height: 1050 })
 const errs = []
 page.on('pageerror', (e) => errs.push(String(e)))
 page.on('dialog', (d) => d.accept())
-await page.goto(`${BASE}/?room=notese2e`, { waitUntil: 'networkidle0' })
+await page.goto(`${BASE}/?room=notese2e`, { waitUntil: 'domcontentloaded' })
+await new Promise((r) => setTimeout(r, 1200))
 await page.evaluate(() => document.fonts.ready)
 const click = (txt, exact) => page.evaluate((t, ex) => {
   const b = [...document.querySelectorAll('button')].find((x) =>
@@ -145,7 +146,8 @@ check('pen ink on the notes is kept',
       withInk.marks.some((m) => m.kind === 'ink' && (m.data || []).length > 0))
 
 // --- survives a reload --------------------------------------------------
-await page.reload({ waitUntil: 'networkidle0' })
+await page.reload({ waitUntil: 'domcontentloaded' })
+await new Promise((r) => setTimeout(r, 1200))
 await click('notes', true); await sleep(900)
 await click('Module 2: Process Management'); await sleep(1500)
 const after = await page.evaluate(() => ({

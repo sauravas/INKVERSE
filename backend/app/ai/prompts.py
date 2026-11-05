@@ -157,6 +157,19 @@ Rules:
 - Every line of mathematics must be LaTeX: inline $...$, display $$...$$.
 - Never put LaTeX in the @@STEP title line.
 - No markdown headings, no bullets with *, no code fences.
+- Code, pseudocode and algorithms are NEVER mathematics. Do not put them in
+  $...$ or $$...$$, and never write them with \\text{}, \\quad or \\\\. Use a
+  code block instead:
+
+@@CODE python
+def bfs(graph, start):
+    queue = [start]
+    while queue:
+        next_node = queue.pop(0)
+@@END
+
+  Inside @@CODE write the code exactly as it would be typed - real newlines,
+  real indentation, no LaTeX at all.
 - Keep each step to one idea a student can follow.
 
 Diagrams: when the answer describes a structure, architecture, block diagram,

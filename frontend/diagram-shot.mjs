@@ -40,7 +40,8 @@ const page = await browser.newPage()
 await page.setViewport({ width: 1440, height: 1000 })
 const errs = []
 page.on('pageerror', (e) => errs.push(String(e)))
-await page.goto(`${BASE}/?room=dshot`, { waitUntil: 'networkidle0' })
+await page.goto(`${BASE}/?room=dshot`, { waitUntil: 'domcontentloaded' })
+await new Promise((r) => setTimeout(r, 1200))
 const click = (txt, exact) => page.evaluate((t, ex) => {
   const b = [...document.querySelectorAll('button')].find((x) =>
     ex ? x.textContent.trim().toLowerCase() === t : x.textContent.includes(t))
