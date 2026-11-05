@@ -52,6 +52,16 @@ LOW_MEMORY_FALLBACK = os.getenv("INKWISE_LOW_MEMORY_FALLBACK", "1") == "1"
 # Start Ollama automatically if it is not running (once a minute at most).
 AUTOSTART_OLLAMA = os.getenv("INKWISE_AUTOSTART_OLLAMA", "1") == "1"
 
+# Run the vision stage on the CPU from the start. Some graphics drivers (the
+# Intel Arc iGPU here) lose the device while encoding a page image, which kills
+# the model runner; INKWISE detects that and moves the model across on its own,
+# so this is only needed to skip the first failure.
+VISION_CPU = os.getenv("INKWISE_VISION_CPU", "0") == "1"
+
+# Longest side of the page image sent to the vision model. Smaller images mean
+# smaller encoder allocations, which is what the driver above chokes on.
+VISION_MAX_SIDE = int(os.getenv("INKWISE_VISION_MAX_SIDE", "1100"))
+
 # Read numeric questions twice and flag disagreement. Costs a second vision
 # pass (a few seconds) and catches misread coefficients, which are otherwise
 # invisible and invalidate the whole solution.

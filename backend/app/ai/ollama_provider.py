@@ -38,6 +38,12 @@ class OllamaProvider:
         self.url = config.OLLAMA_URL
         self._sizes: dict[str, int] = {}
         self._caps: dict[str, set[str]] = {}
+        # models pinned to the CPU because the GPU driver cannot run them here
+        self._cpu_only: set[str] = set()
+        if config.VISION_CPU:
+            self._cpu_only.add(self.vision_model)
+        # consecutive crashes per model, reset by a successful request
+        self._crashes: dict[str, int] = {}
 
     @property
     def staged(self) -> bool:
@@ -97,6 +103,7 @@ class OllamaProvider:
             "ok": not missing,
             "provider": self.label,
             "stages": self._stages(),
+            "cpu_only": sorted(self._cpu_only),
             "models": sorted(sizes),
             "loaded": sorted(loaded),
             "memory": mem,
@@ -222,6 +229,13 @@ class OllamaProvider:
                     pass
         return {"unloaded": done, "memory": resources.memory()}
 
+    # Markers that name the GPU driver specifically. The Intel Arc iGPU loses
+    # the Vulkan device while encoding an image ("ggml_vulkan: device lost on
+    # Vulkan0" in Ollama's server.log), which kills the runner mid-request.
+    _GPU_FAULT = ("device lost", "vulkan", "ggml_", "vk_error", "device_lost",
+                  "out of device memory", "ggml_backend", "rocm", "hip error",
+                  "cuda error")
+
     @staticmethod
     def _is_runner_crash(detail: str) -> bool:
         """Did the model runner die, as opposed to rejecting the request?
@@ -234,7 +248,46 @@ class OllamaProvider:
         return any(s in d for s in (
             "forcibly closed", "error was encountered while running the model",
             "connection reset", "connection refused", "dial tcp", "health resp",
-            "eof", "broken pipe", "runner", "timed out waiting for llama"))
+            "eof", "broken pipe", "runner", "timed out waiting for llama",
+            *OllamaProvider._GPU_FAULT))
+
+    @classmethod
+    def _is_gpu_fault(cls, detail: str) -> bool:
+        d = (detail or "").lower()
+        return any(s in d for s in cls._GPU_FAULT)
+
+    def _note_crash(self, model: str, detail: str) -> bool:
+        """Record a crash and decide whether to stop using the GPU for it.
+
+        Called from both retry loops so the rule is the same wherever the crash
+        is noticed: a crash that names the graphics driver is not transient, and
+        neither is a second consecutive crash. Returns True if this call moved
+        the model to the CPU.
+        """
+        self._crashes[model] = self._crashes.get(model, 0) + 1
+        if self._is_gpu_fault(detail) or self._crashes[model] >= 2:
+            return self._on_gpu_fault(model, detail)
+        return False
+
+    def _on_gpu_fault(self, model: str, detail: str) -> bool:
+        """Move a model onto the CPU after the GPU driver has dropped it.
+
+        The vision stage is where this actually bites: encoding a page image
+        allocates large Vulkan buffers and the driver loses the device, so the
+        same request fails the same way however often it is retried. Running
+        that one model with num_gpu=0 is slower but finishes, and the text
+        stage keeps the GPU to itself. Set INKWISE_VISION_CPU=1 to start there.
+
+        Returns True if this call changed the placement.
+        """
+        if model in self._cpu_only:
+            return False
+        self._cpu_only.add(model)
+        obs.emit("model.cpu",
+                 f"{model} moved to the CPU: this machine's GPU driver drops "
+                 f"the device while running it. Slower, but it completes.",
+                 level="warn", model=model, detail=obs.preview(detail, 160))
+        return True
 
     async def _stream_chat(self, model: str, messages, *, num_predict=2048,
                            temp=0.3, fmt=None, think=None,
@@ -252,6 +305,9 @@ class OllamaProvider:
                         "num_predict": num_predict,
                         "temperature": temp, "top_p": 0.95},
         }
+        if model in self._cpu_only:
+            # offload nothing to the GPU: the driver here cannot survive it
+            body["options"]["num_gpu"] = 0
         # only models that advertise thinking may be sent the flag at all
         if "thinking" in await self.capabilities(model):
             body["think"] = config.OLLAMA_THINK if think is None else think
@@ -261,14 +317,17 @@ class OllamaProvider:
         last = ""
         for attempt in range(attempts):
             produced = False
+            # placement can change between attempts, so set it per request
+            body["options"].pop("num_gpu", None)
+            if model in self._cpu_only:
+                body["options"]["num_gpu"] = 0
             try:
                 async with http.session(config.REQUEST_TIMEOUT) as c:
                     async with c.stream("POST", f"{self.url}/api/chat",
                                         json=body) as r:
                         if r.status_code >= 400:
                             last = (await r.aread()).decode()[:300]
-                            if not (self._is_runner_crash(last)
-                                    and attempt < attempts - 1):
+                            if not self._is_runner_crash(last):
                                 raise ProviderError(
                                     f"Ollama {r.status_code}: {last}")
                         else:
@@ -278,13 +337,15 @@ class OllamaProvider:
                                 d = json.loads(line)
                                 if d.get("error"):
                                     last = str(d["error"])
-                                    if (self._is_runner_crash(last)
-                                            and not produced
-                                            and attempt < attempts - 1):
-                                        break
-                                    raise ProviderError(last)
+                                    # tokens are already on screen: a restart
+                                    # would duplicate them, so this one is fatal
+                                    if produced or not self._is_runner_crash(last):
+                                        raise ProviderError(last)
+                                    break
                                 piece = (d.get("message") or {}).get("content")
                                 if piece:
+                                    if not produced:
+                                        self._crashes[model] = 0
                                     produced = True
                                     yield piece
                             if produced or not last:
@@ -298,27 +359,42 @@ class OllamaProvider:
                 if isinstance(e, httpx.ConnectError) and await self._ensure_server():
                     continue                  # the server is back: retry at once
 
-            # The runner died before emitting anything. On this hardware
-            # (shared-memory iGPU) the crash is often a transient driver fault
-            # rather than a resource problem, and unload+reload of the SAME
-            # model sometimes clears it, sometimes not - so back off longer on
-            # each attempt rather than hammering a wedged driver. Only the
-            # model actually in use is evicted, not whatever the other stage
-            # has loaded (a concurrent request may depend on that).
+            if attempt == attempts - 1:
+                break
+
+            # The runner died before emitting anything. Unload and try again:
+            # on this hardware (shared-memory iGPU) that sometimes clears a
+            # transient driver fault, so back off a little longer each time
+            # rather than hammering a wedged driver. Only the model in use is
+            # evicted, not whatever the other stage has loaded. A crash the
+            # driver will keep repeating moves the model onto the CPU instead.
+            moved = self._note_crash(model, last)
+            if moved:
+                yield Notice(
+                    f"The graphics driver dropped {model} part-way through, so "
+                    f"it is running on the CPU instead. This is slower.")
             obs.emit("model.retry",
-                     f"{model} runner crashed - retry {attempt + 2}/{attempts}",
+                     f"{model} runner crashed - retry {attempt + 2}/{attempts}"
+                     + (" on the CPU" if moved else ""),
                      level="warn", model=model, detail=obs.preview(last, 120))
-            await asyncio.sleep(2.5 * (attempt + 1))
+            await asyncio.sleep(0.5 if moved else 2.5 * (attempt + 1))
             try:
                 await self.unload(model)
+                await self._wait_gone(model)
             except Exception:
                 pass
 
-        raise ProviderError(
-            f"{model} crashed {attempts} times in a row on this machine's GPU "
-            "driver and could not recover. This is usually transient - wait a "
-            "few seconds and press Solve again. If it keeps happening, switch "
-            "to the \"heavy\" provider or restart `ollama serve`.")
+        raise ProviderError(self._exhausted(model, attempts, last))
+
+    def _exhausted(self, model: str, attempts: int, detail: str) -> str:
+        where = "on the CPU" if model in self._cpu_only else "on the GPU"
+        extra = ("" if model in self._cpu_only else
+                 " or set INKWISE_VISION_CPU=1 in .env to keep the page reader "
+                 "off the graphics driver entirely")
+        return (f"{model} crashed {attempts} times in a row {where} and could "
+                f"not recover. Wait a few seconds and try again; if it keeps "
+                f"happening, restart `ollama serve`{extra}. "
+                f"(Last error: {obs.preview(detail, 160)})")
 
     # -- stage 1: vision ---------------------------------------------------
     async def _complete(self, model: str, messages, *, attempts=5,
@@ -337,23 +413,24 @@ class OllamaProvider:
             try:
                 async for piece in self._stream_chat(model, messages,
                                                      attempts=1, **kw):
-                    acc.append(piece)
+                    if not isinstance(piece, Notice):
+                        acc.append(piece)
                 return "".join(acc)
             except ProviderError as e:
                 last = str(e)
                 if not self._is_runner_crash(last) or attempt == attempts - 1:
                     break
-            await asyncio.sleep(2.5 * (attempt + 1))
+            # same placement rule as the streaming loop: a crash the driver
+            # will repeat moves this model to the CPU for the next attempt
+            moved = self._note_crash(model, last)
+            await asyncio.sleep(0.5 if moved else 2.5 * (attempt + 1))
             try:
                 await self.unload(model)
+                await self._wait_gone(model)
             except Exception:
                 pass
         if self._is_runner_crash(last):
-            raise ProviderError(
-                f"{model} crashed {attempts} times in a row on this machine's "
-                "GPU driver and could not recover. This is usually transient - "
-                "wait a few seconds and press Solve again. If it keeps "
-                "happening, restart `ollama serve`.")
+            raise ProviderError(self._exhausted(model, attempts, last))
         raise ProviderError(last)
 
     async def _read_once(self, image_b64: str, user: str, temp: float) -> dict:

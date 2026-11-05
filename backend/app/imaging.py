@@ -10,10 +10,15 @@ import io
 
 from PIL import Image
 
+from . import config
+
 # ruled lines are pale; real ink is dark. Anything darker than this is ink.
 INK_THRESHOLD = 170
 PAD = 36
-MAX_SIDE = 1400
+# The long side the vision model sees. Bigger is not better: the encoder tiles
+# the image, and on a shared-memory iGPU a large tile count is what makes the
+# graphics driver lose the device mid-encode. Tunable via INKWISE_VISION_MAX_SIDE.
+MAX_SIDE = config.VISION_MAX_SIDE
 
 
 def decode(data: str | bytes) -> Image.Image:
