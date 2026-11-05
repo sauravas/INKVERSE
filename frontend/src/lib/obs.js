@@ -137,7 +137,18 @@ export function useAgentFeed(provider) {
       const to = key.split('>')[1]
       const ended = lastEnd[to]
       const done = ended && ended.ts >= ts
-      if (!done || now - ended.ts * 1000 < FLASH_MS) edges[key] = done ? 'fading' : 'live'
+      if (done) {
+        if (now - ended.ts * 1000 < FLASH_MS) edges[key] = 'fading'
+        continue
+      }
+      // An agent.start whose agent.end never arrived - the server restarted
+      // mid-run, or the end scrolled out of the event buffer - used to leave
+      // this edge "live" for the rest of the session. The CSS for a live edge
+      // animates stroke-dashoffset forever, so the browser kept repainting
+      // the whole rails SVG on an idle page. Trust the running set instead,
+      // and let an orphan expire.
+      if (running[to]) edges[key] = 'live'
+      else if (now - ts * 1000 < FLASH_MS) edges[key] = 'fading'
     }
     const flash = {}
     for (const [a, ev] of Object.entries(lastEnd)) {

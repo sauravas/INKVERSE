@@ -187,6 +187,18 @@ html, body, #root {
 @media (prefers-reduced-motion: reduce) {
   .edge-live, .node-live, .agent-dot-live { animation: none; }
 }
+
+/* Turned on from the top bar. The rails' looping SVG animations are the only
+   thing on the page that repaints continuously; on integrated graphics that
+   competes with the model for the same chip, so there has to be a way to stop
+   them without giving up the rails themselves. */
+.calm .edge-live, .calm .edge-fading,
+.calm .node-live, .calm .agent-dot-live, .calm .nib { animation: none; }
+.calm .ink-stroke, .calm .ink-reveal {
+  animation: none;
+  stroke-dashoffset: 0;
+  clip-path: none;
+}
 /* --- hand-drawn diagrams --------------------------------------------------
    Each stroke has pathLength=1, so a dash of length 1 offset by 1 hides it
    and animating the offset to 0 traces it from start to end like a pen.     */

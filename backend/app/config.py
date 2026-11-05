@@ -72,6 +72,17 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("INKWISE_GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 
+# --- web search --------------------------------------------------------------
+# Tavily is a search API built for LLMs: one request returns ranked, already
+# summarised results. Optional - without a key, INKWISE falls back to Wikipedia
+# and DuckDuckGo, which need no account. The key is read from the environment
+# and is never written to disk or returned by any endpoint.
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
+TAVILY_URL = "https://api.tavily.com/search"
+# basic (fast, cheap) or advanced (slower, better for exam-style questions)
+TAVILY_DEPTH = os.getenv("INKWISE_TAVILY_DEPTH", "basic")
+TAVILY_MAX_RESULTS = int(os.getenv("INKWISE_TAVILY_RESULTS", "5"))
+
 REQUEST_TIMEOUT = float(os.getenv("INKWISE_TIMEOUT", "900"))
 
 # --- voice (whisperflow sidecar) ---------------------------------------------

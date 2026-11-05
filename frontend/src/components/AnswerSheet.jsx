@@ -53,13 +53,21 @@ function rand(seed, i, salt = 0) {
   return x - Math.floor(x)
 }
 
+// Each distinct font-variation value is a separate font instance for the
+// browser to build and cache. Letting every glyph pick its own weight out of
+// 130 possibilities meant a page of handwriting asked for 130 instances and
+// repainted slowly on integrated graphics. Five weights are indistinguishable
+// by eye and cost five instances.
+const WEIGHTS = [430, 465, 500, 530, 560]
+
 function glyphStyle(seed, i) {
   const drift = Math.sin((seed % 17) + i / 9) * 0.5      // slow baseline drift
   return {
     display: 'inline-block',
     transform: `translateY(${(rand(seed, i, 1) - 0.5) * 1.6 + drift}px) `
       + `rotate(${(rand(seed, i, 2) - 0.5) * 3.4}deg)`,
-    fontVariationSettings: `'wght' ${430 + Math.round(rand(seed, i, 3) * 130)}`,
+    fontVariationSettings:
+      `'wght' ${WEIGHTS[Math.floor(rand(seed, i, 3) * WEIGHTS.length) % WEIGHTS.length]}`,
     // ink density varies with how hard a pen is pressed
     opacity: 0.84 + rand(seed, i, 4) * 0.16,
   }

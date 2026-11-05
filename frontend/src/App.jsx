@@ -49,6 +49,17 @@ export default function App() {
   const deskRef = useRef(null)   // the desk around the page hosts the agent rails
 
   const [view, setView] = useState('notebook')
+  // Calm mode stops every looping animation. The model and the browser share
+  // one integrated GPU on this class of laptop, so while an answer is being
+  // generated the compositor can be starved enough to flash the window. There
+  // is nothing the page can do about the contention itself; it can stop adding
+  // to it. Remembered, because someone who needs it needs it every time.
+  const [calm, setCalm] = useState(
+    () => localStorage.getItem('inkwise.calm') === '1')
+  useEffect(() => {
+    document.documentElement.classList.toggle('calm', calm)
+    localStorage.setItem('inkwise.calm', calm ? '1' : '0')
+  }, [calm])
   const [tool, setTool] = useState('pen')
   const [color, setColor] = useState(PEN_COLORS[0])
   const [size, setSize] = useState(2.4)
@@ -283,7 +294,7 @@ export default function App() {
   return (
     <div className="flex h-full flex-col">
       <TopBar
-        view={view} setView={setView}
+        view={view} setView={setView} calm={calm} onToggleCalm={() => setCalm((c) => !c)}
         sync={sync} onPair={() => setShowPair(true)}
         provider={provider} setProvider={setProvider} providers={providers}
         health={health} onRefreshHealth={refreshHealth}
@@ -451,6 +462,7 @@ export default function App() {
 /* -------------------------------------------------------------------- bars */
 
 function TopBar({ view, setView, sync, onPair, provider, setProvider, providers,
+                 calm, onToggleCalm,
                   health, onRefreshHealth, web, onToggleWeb, speakAll, onToggleSpeak }) {
   const phones = sync.peers.filter((p) => p.role === 'phone').length
   const dot = sync.status === 'live' ? '#0ca30c'
@@ -497,6 +509,17 @@ function TopBar({ view, setView, sync, onPair, provider, setProvider, providers,
             {speakAll ? '🔊 Read aloud' : '🔈 Voice replies'}
           </button>
         )}
+        <button onClick={onToggleCalm}
+                title={calm
+                  ? 'Calm mode on: no looping animations. Use this if the screen '
+                    + 'flickers while an answer is being written - the model and '
+                    + 'the display share one graphics chip.'
+                  : 'Calm mode off: the pen, the diagrams and the agent rails animate'}
+                className={`rounded-lg px-2 py-1 ${calm
+                  ? 'bg-amber-50 text-amber-800 ring-1 ring-amber-300'
+                  : 'text-ink-soft hover:bg-black/5'}`}>
+          {calm ? '🌙 Calm' : '✨ Motion'}
+        </button>
         <span className="inline-flex items-center gap-1.5">
           <span className="inline-block h-2 w-2 rounded-full" style={{ background: dot }} />
           {sync.status}{sync.latency != null && sync.status === 'live'

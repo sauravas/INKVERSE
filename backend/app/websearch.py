@@ -14,6 +14,8 @@ from urllib.parse import quote
 
 import httpx
 
+from . import config
+
 UA = "INKWISE/1.0 (local study app; https://github.com/) httpx"
 TIMEOUT = httpx.Timeout(8.0, connect=4.0)
 MAX_CHARS = 2400
@@ -55,6 +57,40 @@ async def _wikipedia(c: httpx.AsyncClient, q: str) -> list[dict]:
 
     found = await asyncio.gather(*(summary(t) for t in titles), return_exceptions=True)
     return [f for f in found if isinstance(f, dict)]
+
+
+async def _tavily(c: httpx.AsyncClient, q: str) -> list[dict]:
+    """Tavily, when a key is configured. Skipped silently when it is not.
+
+    Preferred over the other two when available: it searches the open web
+    rather than one encyclopedia, and returns text already trimmed to the
+    question, which matters when the whole block has to fit in a local model's
+    context alongside the student's own notes.
+    """
+    if not config.TAVILY_API_KEY:
+        return []
+    r = await c.post(config.TAVILY_URL, json={
+        "query": q,
+        "search_depth": config.TAVILY_DEPTH,
+        "max_results": config.TAVILY_MAX_RESULTS,
+        "include_answer": True,
+    }, headers={"Authorization": f"Bearer {config.TAVILY_API_KEY}"})
+    if r.status_code == 401:
+        raise RuntimeError("Tavily rejected the API key")
+    r.raise_for_status()
+    d = r.json()
+    out = []
+    # Tavily's own synthesis of the results, when it offers one
+    if d.get("answer"):
+        out.append({"site": "Tavily", "title": f"Summary for \u201c{q}\u201d",
+                    "snippet": d["answer"].strip(), "url": ""})
+    for hit in (d.get("results") or [])[:config.TAVILY_MAX_RESULTS]:
+        body = (hit.get("content") or "").strip()
+        if not body:
+            continue
+        out.append({"site": "web", "title": (hit.get("title") or "")[:120],
+                    "snippet": body, "url": hit.get("url") or ""})
+    return out
 
 
 async def _duckduckgo(c: httpx.AsyncClient, q: str) -> list[dict]:
@@ -104,12 +140,16 @@ async def lookup(question: str) -> dict:
     t0 = time.perf_counter()
     async with httpx.AsyncClient(timeout=TIMEOUT, headers={"User-Agent": UA},
                                  follow_redirects=True) as c:
-        results = await asyncio.gather(_wikipedia(c, q), _duckduckgo(c, q),
-                                       return_exceptions=True)
+        # Tavily first, so its results take the context budget when a key is
+        # set; the other two are the no-account fallback and run either way
+        results = await asyncio.gather(_tavily(c, q), _wikipedia(c, q),
+                                       _duckduckgo(c, q), return_exceptions=True)
     hits, errors = [], []
     for r in results:
         if isinstance(r, Exception):
-            errors.append(type(r).__name__)
+            # the message matters for Tavily (a bad key is worth saying out
+            # loud), not for a transient network error
+            errors.append(str(r) if isinstance(r, RuntimeError) else type(r).__name__)
         else:
             hits.extend(r)
 

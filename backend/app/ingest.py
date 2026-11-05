@@ -177,10 +177,17 @@ INSTRUCTION_RE = re.compile(
     r"(attempt|answer|solve|write)\s+(any|all|the following)|following\s*:?\s*$|"
     r"compulsory|each carr(y|ies)|instructions?", re.I)
 
+# The verb a question opens with. Engineering papers lean on a wider set than
+# the obvious ones: a paper that says "Design a linear phase FIR filter" and
+# "Realise the given system" is asking two questions, and leaving those verbs
+# out silently glued each one onto the question above it.
 QUESTION_HINT_RE = re.compile(
-    r"\?\s*$|^\s*(explain|define|derive|prove|find|solve|evaluate|what|why|how|"
-    r"describe|compare|differentiate|distinguish|state|calculate|determine|show|"
-    r"list|write|discuss|draw|obtain|discuss|illustrate|justify|compute)\b", re.I)
+    r"\?\s*$|^\s*(explain|define|derive|prove|deduce|find|solve|evaluate|what|why|"
+    r"how|describe|compare|differentiate|distinguish|state|calculate|determine|"
+    r"show|list|write|discuss|draw|sketch|plot|obtain|illustrate|justify|compute|"
+    r"design|realise|realize|implement|construct|develop|verify|perform|estimate|"
+    r"simplify|reduce|convert|express|apply|classify|outline|summarise|summarize|"
+    r"mention|name|give|consider)\b", re.I)
 
 
 def _clean_lines(text: str) -> list[str]:
