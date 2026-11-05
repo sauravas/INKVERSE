@@ -101,13 +101,15 @@ const InkCanvas = forwardRef(function InkCanvas(
     }
 
     // The lines belong to the page: at whatever scale this screen is showing
-    // it, one line of handwriting is one ruled line. Without this the ink is
-    // scaled to the canvas and the rules are not, so they agree on a phone
-    // and disagree on a laptop.
+    // it, one line of handwriting is one ruled line. The ruled background is
+    // painted by the page wrapper, not by this canvas, so the variable has to
+    // be set there - setting it here looks right in a measurement and changes
+    // nothing on screen.
     const pageScale = fitWidth ? w / PAGE_W : box.scale
-    wrap.style.setProperty('--rule', `${rulePx(pageScale).toFixed(2)}px`)
-    wrap.style.setProperty('--rule-shift',
-                           `${(-0.25 * RULE_UNITS * pageScale).toFixed(2)}px`)
+    const paper = wrap.closest('[data-paper]') || wrap
+    paper.style.setProperty('--rule', `${rulePx(pageScale).toFixed(2)}px`)
+    paper.style.setProperty('--rule-shift',
+                            `${(-0.25 * RULE_UNITS * pageScale).toFixed(2)}px`)
 
     cv.style.width = `${w}px`
     cv.style.height = `${h}px`

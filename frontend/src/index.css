@@ -27,10 +27,13 @@
   --rule: 2rem;
   --rule-shift: -8px;
   --math-shift: 0em;
-  --rule-gradient: linear-gradient(to bottom, transparent 0,
-    transparent calc(var(--rule) - 1px), var(--color-rule) calc(var(--rule) - 1px),
-    var(--color-rule) var(--rule));
 }
+
+/* The ruled lines are written out at each use rather than kept in a custom
+   property. A custom property resolves its own var() references against the
+   element it is declared on, so a gradient defined up here would be baked to
+   the root's rule height and keep drawing 32px lines however the page is
+   scaled - which showed up as thick bands instead of thin rules. */
 
 html, body, #root {
   height: 100%;
@@ -60,10 +63,24 @@ html, body, #root {
 /* Ruled-paper background, drawn in CSS so it costs no canvas time. */
 .ruled {
   background-color: var(--color-paper);
-  background-image: var(--rule-gradient);
+  background-image: linear-gradient(to bottom, transparent 0,
+    transparent calc(var(--rule) - 1px), var(--color-rule) calc(var(--rule) - 1px),
+    var(--color-rule) var(--rule));
   background-size: 100% var(--rule);
   background-position: 0 var(--rule-shift);
 }
+
+/* Everything written on the page is sized from the rule, not from the root
+   font size. The page can be shown at any scale - a phone draws it at about a
+   third, a laptop at four fifths - and handwriting that did not scale with its
+   own lines was the reason a sentence that fitted between two lines on a phone
+   spilled over three on a laptop. The ratios are the ones the fixed sizes
+   used to produce at a 32px rule. */
+[data-paper] .hand.lined-text { font-size: calc(var(--rule) * 0.71); }
+[data-paper] .step-card header .hand { font-size: calc(var(--rule) * 0.725); }
+[data-paper] .lined-input,
+[data-paper] .lined-input + .lined-ghost,
+[data-paper] .lined-ghost { font-size: calc(var(--rule) * 0.71); }
 
 /* every line of text on the page is exactly one rule tall */
 .lined-text { line-height: var(--rule); }
@@ -86,7 +103,9 @@ html, body, #root {
   color: var(--color-ink);
   line-height: var(--rule);
   background-color: transparent;
-  background-image: var(--rule-gradient);
+  background-image: linear-gradient(to bottom, transparent 0,
+    transparent calc(var(--rule) - 1px), var(--color-rule) calc(var(--rule) - 1px),
+    var(--color-rule) var(--rule));
   background-size: 100% var(--rule);
   background-position: 0 var(--rule-shift);
   background-attachment: local;

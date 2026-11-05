@@ -57,6 +57,14 @@ export default function App() {
   // to it. Remembered, because someone who needs it needs it every time.
   const [calm, setCalm] = useState(
     () => localStorage.getItem('inkwise.calm') === '1')
+  // How wide the sheet is drawn. Everything on the page - the ruled lines,
+  // the ink, the handwriting of the answer - is in proportion to this, so it
+  // behaves like moving the notebook closer or further away rather than like
+  // changing a font size. A phone shows the page at about 390px; picking
+  // Small here makes a laptop look like the phone.
+  const [paperW, setPaperW] = useState(
+    () => Number(localStorage.getItem('inkwise.paper')) || 880)
+  useEffect(() => { localStorage.setItem('inkwise.paper', String(paperW)) }, [paperW])
   useEffect(() => {
     document.documentElement.classList.toggle('calm', calm)
     localStorage.setItem('inkwise.calm', calm ? '1' : '0')
@@ -309,6 +317,7 @@ export default function App() {
     <div className="flex h-full flex-col">
       <TopBar
         view={view} setView={setView} calm={calm} onToggleCalm={() => setCalm((c) => !c)}
+        paperW={paperW} setPaperW={setPaperW}
         sync={sync} onPair={() => setShowPair(true)}
         provider={provider} setProvider={setProvider} providers={providers}
         health={health} onRefreshHealth={refreshHealth}
@@ -381,7 +390,7 @@ export default function App() {
             <div data-paper
                  className="ruled mx-auto rounded-sm shadow-[0_2px_24px_rgba(28,25,18,0.13)]
                             ring-1 ring-paper-edge"
-                 style={{ width: 'min(94%, 880px)' }}>
+                 style={{ width: `min(94%, ${paperW}px)` }}>
               <div className="border-l-2 border-margin/70" style={{ marginLeft: '8%' }}>
                 {/* writing area: height tracks the ink, not a fixed page */}
                 <InkCanvas
@@ -478,7 +487,7 @@ export default function App() {
 /* -------------------------------------------------------------------- bars */
 
 function TopBar({ view, setView, sync, onPair, provider, setProvider, providers,
-                 calm, onToggleCalm,
+                 calm, onToggleCalm, paperW, setPaperW,
                   health, onRefreshHealth, web, onToggleWeb, speakAll, onToggleSpeak }) {
   const phones = sync.peers.filter((p) => p.role === 'phone').length
   const dot = sync.status === 'live' ? '#0ca30c'
@@ -525,6 +534,16 @@ function TopBar({ view, setView, sync, onPair, provider, setProvider, providers,
             {speakAll ? '🔊 Read aloud' : '🔈 Voice replies'}
           </button>
         )}
+        <select value={paperW} onChange={(e) => setPaperW(Number(e.target.value))}
+                title="How big the page is drawn. Smaller means more lines on
+                       screen and smaller handwriting, like a phone."
+                className="rounded-lg bg-transparent px-1 py-1 text-ink-soft
+                           hover:bg-black/5">
+          <option value={520}>Page: small</option>
+          <option value={700}>Page: medium</option>
+          <option value={880}>Page: large</option>
+          <option value={1100}>Page: huge</option>
+        </select>
         <button onClick={onToggleCalm}
                 title={calm
                   ? 'Calm mode on: no looping animations. Use this if the screen '
