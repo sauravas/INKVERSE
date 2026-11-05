@@ -91,8 +91,11 @@ export function useAgentFeed(provider) {
     const lastEnd = {}          // agent -> agent.end event
     const liveEdges = {}        // "from>to" -> ts
     const resident = new Set(seedResident)
+    const lastOutput = {}       // agent -> last agent.output event
+    let lastRun = null          // trace of the newest run
     for (const ev of events) {
       const a = ev.agent
+      if (ev.kind === 'agent.output') lastOutput[a] = ev
       if (ev.kind === 'agent.start') {
         const r = running[a] || { count: 0 }
         running[a] = { count: r.count + 1, message: ev.message, since: ev.ts }
@@ -105,6 +108,7 @@ export function useAgentFeed(provider) {
         lastEnd[a] = ev
       } else if (ev.kind === 'run.start') {
         runs[ev.trace] = ev
+        lastRun = ev.trace
       } else if (ev.kind === 'run.end') {
         delete runs[ev.trace]
       } else if (ev.kind === 'model.call' && ev.data?.model) {
@@ -130,7 +134,7 @@ export function useAgentFeed(provider) {
       else if (status !== 'error' && age < FLASH_MS) flash[a] = status === 'cancelled' ? 'cancelled' : 'ok'
     }
     return {
-      running, flash, edges, resident,
+      running, flash, edges, resident, lastOutput, lastRun,
       activeRuns: Object.values(runs),
     }
   }, [events, now, seedResident])
@@ -144,7 +148,68 @@ export function useAgentFeed(provider) {
     return () => clearInterval(t)
   }, [animating])
 
-  return { events, status, topo, ...derived }
+  return { events, status, topo, now, ...derived }
+}
+
+/**
+ * Rebuild one run's orchestration flow from its events.
+ *
+ * A flow step id is either an agent id (driven by that agent's span) or an
+ * orchestrator step (driven by "step" events). Steps the run never reached are
+ * marked skipped once the run has ended.
+ */
+export function runFlow(events, trace, flows) {
+  if (!trace || !flows) return null
+  const evs = events.filter((e) => e.trace === trace)
+  const start = evs.find((e) => e.kind === 'run.start')
+  if (!start) return null
+  const flow = flows.find((f) => f.id === start.data?.flow)
+  if (!flow) return null
+  const end = evs.find((e) => e.kind === 'run.end')
+
+  const st = Object.fromEntries(flow.steps.map((s) => [s.id, { state: 'pending' }]))
+  for (const e of evs) {
+    const sid = e.kind === 'step' ? e.data?.step
+      : e.kind.startsWith('agent.') ? e.agent : null
+    const s = sid && st[sid]
+    if (!s) continue
+    if (e.kind === 'step') {
+      s.state = e.data?.skipped ? 'skipped' : e.level === 'error' ? 'error' : 'done'
+      s.note = e.message
+      s.level = e.level
+    } else if (e.kind === 'agent.start') {
+      s.state = 'running'
+      s.note = e.message
+      s.t0 = e.ts
+      if (e.data?.caller && e.data.caller !== 'orchestrator') s.handoff = e.data.caller
+    } else if (e.kind === 'agent.output') {
+      s.note = e.message
+      s.level = e.level
+    } else if (e.kind === 'agent.error') {
+      s.state = 'error'
+      s.note = e.message
+    } else if (e.kind === 'agent.end') {
+      const status = e.data?.status
+      s.state = status === 'ok' ? 'done' : status === 'error' ? 'error' : 'cancelled'
+      s.ms = e.data?.duration_ms
+    }
+  }
+  const status = end ? end.data?.status : 'running'
+  if (end) {
+    for (const s of Object.values(st)) {
+      if (s.state === 'pending') {
+        s.state = 'skipped'
+        s.note = status === 'ok' ? 'not needed for this request' : 'not reached'
+      }
+    }
+  }
+  return {
+    trace, flow, status,
+    message: start.message,
+    startTs: start.ts,
+    ms: end?.data?.duration_ms,
+    steps: flow.steps.map((s) => ({ ...s, ...st[s.id] })),
+  }
 }
 
 export function fmtTime(ts) {

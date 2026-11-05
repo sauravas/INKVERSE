@@ -5,7 +5,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import {
-  AGENT_COLORS, AGENT_SHORT, fmtMs, fmtTime, useAgentFeed,
+  AGENT_COLORS, AGENT_SHORT, fmtMs, fmtTime, runFlow, useAgentFeed,
 } from '../lib/obs'
 
 const PAPER_MAX = 880
@@ -18,6 +18,7 @@ export default function AgentRails({ hostRef, provider }) {
   const [box, setBox] = useState({ w: 0, h: 0 })
   const [selected, setSelected] = useState(null)
   const [drawer, setDrawer] = useState(false)
+  const [pinned, setPinned] = useState(null)     // trace shown in the flow card
 
   useEffect(() => {
     const el = hostRef.current
@@ -46,9 +47,14 @@ export default function AgentRails({ hostRef, provider }) {
                style={{ left: GAP, width: rail }}>
           <GraphCard feed={feed} selected={selected} onSelect={toggle} />
         </aside>
-        <aside className="pointer-events-auto absolute bottom-4 top-4 z-10 flex flex-col"
+        <aside className="pointer-events-auto absolute bottom-4 top-4 z-10 flex flex-col gap-3"
                style={{ right: GAP + 6, width: rail }}>
-          <LogCard feed={feed} selected={selected} onClearFilter={() => setSelected(null)} />
+          <FlowCard feed={feed} pinned={pinned} onUnpin={() => setPinned(null)}
+                    className="max-h-[55%] shrink-0" />
+          <div className="flex min-h-0 flex-1 flex-col">
+            <LogCard feed={feed} selected={selected} onPinRun={setPinned}
+                     onClearFilter={() => setSelected(null)} />
+          </div>
         </aside>
       </>
     )
@@ -73,9 +79,13 @@ export default function AgentRails({ hostRef, provider }) {
                onClick={(e) => e.stopPropagation()}>
             <button onClick={() => setDrawer(false)}
                     className="self-end text-xs text-ink-soft hover:underline">close</button>
-            <GraphCard feed={feed} selected={selected} onSelect={toggle} />
-            <div className="h-[60vh] shrink-0">
-              <LogCard feed={feed} selected={selected}
+            <FlowCard feed={feed} pinned={pinned} onUnpin={() => setPinned(null)}
+                      className="shrink-0" />
+            <div className="shrink-0">
+              <GraphCard feed={feed} selected={selected} onSelect={toggle} />
+            </div>
+            <div className="flex h-[60vh] shrink-0 flex-col">
+              <LogCard feed={feed} selected={selected} onPinRun={setPinned}
                        onClearFilter={() => setSelected(null)} />
             </div>
           </div>
@@ -129,8 +139,8 @@ function GraphCard({ feed, selected, onSelect }) {
               Reader → Verifier when digits are found, Explainer → Reader for a
               handwritten question.
             </p>
+            <AgentStats feed={feed} selected={selected} onSelect={onSelect} />
             <Scheduler feed={feed} />
-            <Flows flows={t.flows} />
           </>
         ) : (
           <p className="py-6 text-center text-xs text-ink-soft">
@@ -340,17 +350,192 @@ function Scheduler({ feed }) {
   )
 }
 
-function Flows({ flows }) {
+function AgentStats({ feed, selected, onSelect }) {
+  const { topo, running, lastOutput } = feed
+  const stats = topo.stats || {}
+  const active = topo.agents.filter((a) => a.status === 'active')
+  const sel = topo.agents.find((a) => a.id === selected)
   return (
-    <details className="mt-3 text-[11px]" open>
+    <div className="mt-3 text-[11px]">
+      <div className="mb-1 font-medium text-ink">Per-agent activity</div>
+      <table className="w-full border-collapse">
+        <thead>
+          <tr className="text-left text-[10px] uppercase tracking-wide text-ink-soft">
+            <th className="py-0.5 font-medium">Agent</th>
+            <th className="py-0.5 text-right font-medium">Calls</th>
+            <th className="py-0.5 text-right font-medium">Errors</th>
+            <th className="py-0.5 text-right font-medium">Avg</th>
+            <th className="py-0.5 text-right font-medium">Last</th>
+          </tr>
+        </thead>
+        <tbody>
+          {active.map((a) => {
+            const s = stats[a.id]
+            const avg = s?.calls ? Math.round(s.total_ms / s.calls) : null
+            return (
+              <tr key={a.id} onClick={() => onSelect(a.id)}
+                  className={`cursor-pointer border-t border-black/5 ${
+                    selected === a.id ? 'bg-amber-50' : 'hover:bg-black/[0.03]'}`}>
+                <td className="py-1">
+                  <AgentTag id={a.id} />
+                  {running[a.id] && (
+                    <span className="agent-dot-live ml-1 inline-block h-1.5 w-1.5 rounded-full"
+                          style={{ background: AGENT_COLORS[a.id] }} />
+                  )}
+                </td>
+                <td className="py-1 text-right tabular-nums">{s?.calls ?? 0}</td>
+                <td className={`py-1 text-right tabular-nums ${s?.errors ? 'text-red-700' : ''}`}>
+                  {s?.errors ?? 0}
+                </td>
+                <td className="py-1 text-right tabular-nums text-ink-soft">{fmtMs(avg) || '-'}</td>
+                <td className="py-1 text-right tabular-nums text-ink-soft">
+                  {fmtMs(s?.last_ms) || '-'}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+      {sel && (
+        <div className="mt-2 rounded-md bg-amber-50/70 px-2.5 py-2 leading-4">
+          <div className="font-semibold text-ink">{sel.name}</div>
+          <div className="text-ink-soft">{sel.role}</div>
+          <div className="mt-1 text-ink-soft">
+            <b className="font-medium text-ink">Called by:</b> {sel.invoked_by}
+          </div>
+          {lastOutput[sel.id] && (
+            <div className="mt-1 text-ink-soft">
+              <b className="font-medium text-ink">Last result:</b> {lastOutput[sel.id].message}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* ----------------------------------------------------------- live flow */
+
+const STEP_STYLE = {
+  done: { icon: '✓', ring: '#0ca30c', fill: '#0ca30c', text: '#fff' },
+  running: { icon: '', ring: '#2f6fed', fill: '#2f6fed', text: '#fff' },
+  error: { icon: '✗', ring: '#d03b3b', fill: '#d03b3b', text: '#fff' },
+  cancelled: { icon: '■', ring: '#b45309', fill: '#fff', text: '#b45309' },
+  skipped: { icon: '–', ring: '#b4bccd', fill: '#fff', text: '#8a94a8' },
+  pending: { icon: '', ring: '#b4bccd', fill: '#fff', text: '#8a94a8' },
+}
+
+function StepDot({ state }) {
+  const st = STEP_STYLE[state] || STEP_STYLE.pending
+  return (
+    <span className={`relative z-[1] mt-[1px] flex h-4 w-4 shrink-0 items-center justify-center
+                      rounded-full text-[9px] font-bold ${state === 'running' ? 'agent-dot-live' : ''}`}
+          style={{ background: st.fill, color: st.text, border: `1.5px solid ${st.ring}`,
+                   borderStyle: state === 'skipped' ? 'dashed' : 'solid' }}>
+      {st.icon}
+    </span>
+  )
+}
+
+function FlowCard({ feed, pinned, onUnpin, className = '' }) {
+  const flows = feed.topo?.flows
+  const trace = (pinned && feed.events.some((e) => e.trace === pinned)) ? pinned : feed.lastRun
+  const run = runFlow(feed.events, trace, flows)
+  const isPinned = run && pinned === run.trace
+
+  const status = run?.status
+  const chip = !run ? null
+    : status === 'running' ? { t: 'running', c: 'bg-blue-100 text-blue-900' }
+      : status === 'ok' ? { t: `done ${fmtMs(run.ms)}`, c: 'bg-emerald-100 text-emerald-900' }
+        : status === 'error' ? { t: `failed ${fmtMs(run.ms)}`, c: 'bg-red-100 text-red-800' }
+          : { t: status, c: 'bg-amber-100 text-amber-900' }
+
+  return (
+    <Card title="Live flow" className={className}
+          right={chip && (
+            <>
+              {isPinned && (
+                <button onClick={onUnpin} className="rounded px-1.5 py-0.5 hover:bg-black/5">
+                  follow latest
+                </button>
+              )}
+              <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${chip.c}`}>
+                {chip.t}
+              </span>
+            </>
+          )}>
+      <div className="scroll-thin min-h-0 overflow-y-auto px-3 pb-3 pt-2">
+        {run ? (
+          <>
+            <div className="mb-2 flex items-baseline gap-1.5 text-[10px] uppercase tracking-wide
+                            text-ink-soft">
+              <span className="font-semibold text-ink">{run.flow.name}</span>
+              <span>#{run.trace}</span>
+              <span className="ml-auto font-mono normal-case">{fmtTime(run.startTs)}</span>
+            </div>
+            <ol className="relative">
+              {run.steps.map((s, i) => {
+                const elapsed = s.state === 'running' && s.t0
+                  ? Math.max(0, Math.round(feed.now - s.t0 * 1000)) : null
+                const last = i === run.steps.length - 1
+                const quiet = s.state === 'pending' || s.state === 'skipped'
+                return (
+                  <li key={s.id} className="relative flex gap-2 pb-2.5 last:pb-0">
+                    {!last && (
+                      <span className="absolute left-[7.5px] top-4 h-[calc(100%-12px)] w-px
+                                       bg-black/10" />
+                    )}
+                    <StepDot state={s.state} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-baseline gap-1.5">
+                        <span className={`text-[12px] leading-4 ${
+                          quiet ? 'text-ink-soft' : 'font-medium text-ink'}`}>
+                          {s.label}
+                        </span>
+                        {s.agent !== 'orchestrator' && <AgentTag id={s.agent} />}
+                        <span className="ml-auto shrink-0 text-[10px] tabular-nums text-ink-soft">
+                          {s.state === 'running' ? `${fmtMs(elapsed)}…` : fmtMs(s.ms)}
+                        </span>
+                      </div>
+                      {s.note && (
+                        <div className={`mt-0.5 break-words text-[10.5px] leading-4 ${
+                          s.state === 'error' ? 'text-red-700'
+                            : s.level === 'warn' ? 'text-amber-800' : 'text-ink-soft'}`}>
+                          {s.handoff ? `hand-off from ${AGENT_SHORT[s.handoff]} · ` : ''}
+                          {s.note}
+                        </div>
+                      )}
+                    </div>
+                  </li>
+                )
+              })}
+            </ol>
+          </>
+        ) : (
+          <p className="pb-1 text-[11px] leading-4 text-ink-soft">
+            Each step of your next request will light up here as the orchestrator
+            routes it between agents.
+          </p>
+        )}
+        {flows && <AllFlows flows={flows} current={run?.flow.id} />}
+      </div>
+    </Card>
+  )
+}
+
+function AllFlows({ flows, current }) {
+  return (
+    <details className="mt-3 border-t border-black/5 pt-2 text-[11px]" open={!current}>
       <summary className="cursor-pointer font-medium text-ink">
-        How each request is orchestrated
+        All orchestration flows
       </summary>
       <ol className="mt-1.5 space-y-1.5">
         {flows.map((f) => (
           <li key={f.id} className="leading-4">
-            <span className="font-semibold text-ink">{f.name}: </span>
-            <span className="text-ink-soft">{f.steps.join(' → ')}</span>
+            <span className={`font-semibold ${f.id === current ? 'text-accent' : 'text-ink'}`}>
+              {f.name}:{' '}
+            </span>
+            <span className="text-ink-soft">{f.steps.map((s) => s.label).join(' → ')}</span>
           </li>
         ))}
       </ol>
@@ -360,7 +545,7 @@ function Flows({ flows }) {
 
 /* ------------------------------------------------------------------ log */
 
-function LogCard({ feed, selected, onClearFilter }) {
+function LogCard({ feed, selected, onClearFilter, onPinRun }) {
   const [paused, setPaused] = useState(null)       // frozen event list
   const [clearedAt, setClearedAt] = useState(0)
   const listRef = useRef(null)
@@ -411,7 +596,7 @@ function LogCard({ feed, selected, onClearFilter }) {
           <p className="px-1 py-6 text-center font-sans text-xs leading-5 text-ink-soft">
             No agent activity yet.<br />Write a question and press Solve.
           </p>
-        ) : shown.map((e) => <LogRow key={e.seq} e={e} />)}
+        ) : shown.map((e) => <LogRow key={e.seq} e={e} onPinRun={onPinRun} />)}
       </div>
     </Card>
   )
@@ -431,13 +616,15 @@ const KIND_ICON = {
   'agent.start': '▶', 'agent.end': '■', 'agent.output': '→', 'agent.error': '✗',
   route: '↳', 'model.call': '⚙', 'model.first_token': '⚙', 'model.evict': '⇣',
   'model.retry': '↻', 'guard.block': '⛔', 'consent.blocked': '🔒', 'run.error': '✗',
+  step: '◆',
 }
 
-function LogRow({ e }) {
+function LogRow({ e, onPinRun }) {
   if (e.kind === 'run.start') {
     return (
-      <div className="mb-1 mt-2.5 border-t border-dashed border-black/10 pt-1.5 font-sans first:mt-0
-                      first:border-0 first:pt-0">
+      <div onClick={() => onPinRun?.(e.trace)} title="Show this run in Live flow"
+           className="mb-1 mt-2.5 cursor-pointer border-t border-dashed border-black/10 pt-1.5
+                      font-sans first:mt-0 first:border-0 first:pt-0 hover:bg-black/[0.03]">
         <div className="flex items-baseline gap-1.5 text-[10px] uppercase tracking-wide text-ink-soft">
           <span className="font-semibold text-ink">{e.data?.flow}</span>
           <span>#{e.trace}</span>
