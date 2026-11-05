@@ -75,8 +75,18 @@ await click('dashboard', true); await wait(900)
 await click('__latex'); await wait(700)
 await click('Write breadth-first'); await wait(3000)
 
-const body = await page.evaluate(() => document.body.innerText)
-const html = await page.content()
+// Scope every text assertion to the answer itself. The agent log in the
+// margin replays recent runs verbatim, so a solve from earlier in the session
+// can legitimately put LaTeX on the page outside the answer sheet.
+const body = await page.evaluate(() => {
+  const sheet = document.querySelector('[data-answer-start]')?.closest('div')
+    ?.parentElement || document.querySelector('.ruled') || document.body
+  return sheet.innerText
+})
+const html = await page.evaluate(() => {
+  const sheet = document.querySelector('.ruled') || document.body
+  return sheet.innerHTML
+})
 
 check('no KaTeX error markup on the page', !html.includes('katex-error'))
 check('no raw \\text{ on the page', !body.includes('\\text{'))

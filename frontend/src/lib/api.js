@@ -114,35 +114,37 @@ export const api = {
  * Returns an abort function.
  */
 export function streamSteps(url, body, { onSteps, onSources, onNotice, onDone, onError, onEvent } = {}) {
-  const acc = []
+  let steps = []
   return streamEvents(url, body, (ev) => {
     onEvent?.(ev)
     if (ev.type === 'sources') { onSources?.(ev.items || []); return }
     if (ev.type === 'notice') { onNotice?.(ev.message); return }
     if (ev.type === 'error') { onError?.(new Error(ev.message)); return }
     if (ev.type === 'done') { onDone?.({ ttft: ev.ttft_s, total: ev.total_s }); return }
-    if (ev.type === 'step_open' || ev.type === 'segment') {
-      acc.push(ev)
-      onSteps?.(foldSteps(acc))
+    if (ev.type === 'step_open') {
+      steps = [...steps, { index: ev.index, title: ev.title, final: ev.final,
+                           segments: [] }]
+      onSteps?.(steps)
+    } else if (ev.type === 'segment' && steps.length) {
+      // Only the step being written changes. Rebuilding every step on every
+      // token - which is what this used to do - gave each one a new identity,
+      // so React re-rendered the whole answer for each token and the page
+      // visibly flashed. Finished steps now keep their identity and are
+      // skipped by StepCard's memo.
+      const last = steps.length - 1
+      const cur = steps[last]
+      steps = [...steps.slice(0, last), {
+        ...cur,
+        segments: [...cur.segments, {
+          kind: ev.kind, value: ev.value, display: ev.display,
+          ...(ev.diagram ? { diagram: ev.diagram } : {}),
+          ...(ev.table ? { table: ev.table } : {}),
+          ...(ev.code ? { code: ev.code } : {}),
+        }],
+      }]
+      onSteps?.(steps)
     }
   }, (e) => onError?.(e))
-}
-
-function foldSteps(events) {
-  const steps = []
-  let cur = null
-  for (const e of events) {
-    if (e.type === 'step_open') {
-      cur = { index: e.index, title: e.title, final: e.final, segments: [] }
-      steps.push(cur)
-    } else if (e.type === 'segment' && cur) {
-      cur.segments.push({ kind: e.kind, value: e.value, display: e.display,
-                          ...(e.diagram ? { diagram: e.diagram } : {}),
-                          ...(e.table ? { table: e.table } : {}),
-                          ...(e.code ? { code: e.code } : {}) })
-    }
-  }
-  return steps
 }
 
 /**

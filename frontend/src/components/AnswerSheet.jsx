@@ -307,12 +307,15 @@ export default function AnswerSheet({
 }) {
   const offsets = useMemo(() => {
     const out = []
+    const sizes = []
     let run = 0
     for (const s of steps) {
       out.push(run)
-      run += s.segments.reduce((n, x) => n + segLen(x), 0)
+      const n = s.segments.reduce((a, x) => a + segLen(x), 0)
+      sizes.push(n)
+      run += n
     }
-    return { offsets: out, total: run }
+    return { offsets: out, sizes, total: run }
   }, [steps])
 
   const revealed = useWriter(offsets.total, !!instant)
@@ -336,8 +339,13 @@ export default function AnswerSheet({
           <StepCard
             step={s}
             offset={offsets.offsets[i]}
-            revealed={revealed}
-            writing={writing}
+            // Clamped to this step, so a step that is fully written gets the
+            // same value every frame and its card stops re-rendering. Passing
+            // the raw counter re-rendered every card 60 times a second, which
+            // is what made the whole page flash while an answer was arriving.
+            revealed={offsets.offsets[i] + Math.max(0, Math.min(
+              revealed - offsets.offsets[i], offsets.sizes[i]))}
+            writing={writing && revealed < offsets.offsets[i] + offsets.sizes[i]}
             selected={selectedStep?.index === s.index}
             onSelect={onSelectStep}
             onAsk={onAskStep}
