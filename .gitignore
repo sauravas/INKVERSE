@@ -1,0 +1,21 @@
+# environments and dependencies
+.venv/
+node_modules/
+__pycache__/
+*.pyc
+
+# build output
+frontend/dist/
+
+# local user data - the SQLite notebook/study database
+data/
+
+# secrets
+.env
+
+# generated benchmark/test artifacts (scripts that produce them are tracked)
+bench/images/
+bench/math_images/
+bench/*.log
+bench/*.json
+bench/shot-*.png

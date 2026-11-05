@@ -1,0 +1,105 @@
+@import 'tailwindcss';
+@import 'katex/dist/katex.min.css';
+
+@font-face {
+  font-family: 'Caveat';
+  src: url('/fonts/Caveat.ttf') format('truetype-variations');
+  font-weight: 400 700;
+  font-display: swap;
+}
+
+@theme {
+  --font-hand: 'Caveat', 'Segoe Script', 'Bradley Hand', cursive;
+  --color-paper: #fbf9f3;
+  --color-paper-edge: #efe9dc;
+  --color-rule: #dde6f2;
+  --color-margin: #f0c4c4;
+  --color-ink: #16213a;
+  --color-ink-soft: #46557a;
+  --color-accent: #2f6fed;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  background: #eceadf;
+  color: var(--color-ink);
+  font-family: ui-sans-serif, system-ui, 'Segoe UI', sans-serif;
+  overscroll-behavior: none;
+}
+
+/* The canvas must own all pointer gestures, or the page scrolls while writing. */
+.ink-surface {
+  touch-action: none;
+  -ms-touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  cursor: crosshair;
+}
+
+.hand {
+  font-family: var(--font-hand);
+  font-variation-settings: 'wght' 500;
+  letter-spacing: 0.01em;
+}
+
+/* Ruled-paper background, drawn in CSS so it costs no canvas time. */
+.ruled {
+  background-color: var(--color-paper);
+  background-image:
+    linear-gradient(to bottom, transparent 0, transparent calc(2rem - 1px), var(--color-rule) calc(2rem - 1px), var(--color-rule) 2rem);
+  background-size: 100% 2rem;
+}
+
+/* KaTeX is kept legible rather than forced into a handwriting face, but it is
+   tinted and tilted slightly so it sits naturally in a handwritten answer. */
+.ink-math .katex {
+  color: var(--color-ink);
+  font-size: 1.04em;
+}
+.ink-math--tilt {
+  display: inline-block;
+  transform: rotate(-0.35deg);
+}
+
+.step-card {
+  position: relative;
+  transition: background-color 140ms ease, box-shadow 140ms ease;
+}
+.step-card[data-selected='true'] {
+  background: #fff8dc80;
+  box-shadow: inset 3px 0 0 0 #e0a92a;
+}
+.step-card:hover .step-ask {
+  opacity: 1;
+}
+.step-ask {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+@keyframes nib-blink {
+  0%, 60% { opacity: 1; }
+  61%, 100% { opacity: 0.15; }
+}
+.nib {
+  display: inline-block;
+  width: 2px;
+  height: 1.05em;
+  vertical-align: -0.18em;
+  background: var(--color-ink);
+  margin-left: 1px;
+  animation: nib-blink 900ms steps(1, end) infinite;
+}
+
+.scroll-thin::-webkit-scrollbar { width: 9px; height: 9px; }
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: #c9c2b2; border-radius: 9px; border: 2px solid transparent;
+  background-clip: content-box;
+}
+.scroll-thin::-webkit-scrollbar-track { background: transparent; }
+
+@media print {
+  .no-print { display: none !important; }
+}
