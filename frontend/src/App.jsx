@@ -277,7 +277,8 @@ export default function App() {
           {/* the notebook: question written on top, answer written below it */}
           <div ref={sheetRef}
                className="scroll-thin min-h-0 flex-1 overflow-y-auto bg-[#eceadf] py-5">
-            <div className="ruled mx-auto rounded-sm shadow-[0_2px_24px_rgba(28,25,18,0.13)]
+            <div data-paper
+                 className="ruled mx-auto rounded-sm shadow-[0_2px_24px_rgba(28,25,18,0.13)]
                             ring-1 ring-paper-edge"
                  style={{ width: 'min(94%, 880px)' }}>
               <div className="border-l-2 border-margin/70" style={{ marginLeft: '8%' }}>

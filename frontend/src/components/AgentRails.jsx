@@ -1,21 +1,36 @@
 // Agent observability, drawn in the empty desk space either side of the
-// notebook page: the orchestration graph on the left, the live log on the
-// right. When the window is too narrow for side rails, both move into a
-// drawer behind a small button so the page itself is never covered.
+// notebook page: the orchestration graph on the left; on the right, which
+// agent is working now, what runs next, the live flow and the log. Whatever
+// does not fit beside the page moves into a drawer behind a small button, so
+// the page itself is never covered.
 
 import { useEffect, useRef, useState } from 'react'
 import {
-  AGENT_COLORS, AGENT_SHORT, fmtMs, fmtTime, runFlow, useAgentFeed,
+  AGENT_COLORS, AGENT_SHORT, fmtMs, fmtTime, nowNext, runFlow, useAgentFeed,
 } from '../lib/obs'
 
-const PAPER_MAX = 880
-const MIN_RAIL = 250
+const MIN_RAIL = 240
 const MAX_RAIL = 400
 const GAP = 16
+const SCROLLBAR = 8
+
+// Free desk space either side of the actual page element. Measuring the page
+// (rather than assuming its width) keeps the rails out of the way of any
+// notebook layout, including wider pages.
+function measure(host) {
+  const hr = host.getBoundingClientRect()
+  const paper = host.querySelector('[data-paper]') || host.querySelector('.ruled')
+  if (paper) {
+    const pr = paper.getBoundingClientRect()
+    return { w: hr.width, left: pr.left - hr.left, right: hr.right - pr.right - SCROLLBAR }
+  }
+  const side = (hr.width - Math.min(hr.width * 0.94, 880)) / 2
+  return { w: hr.width, left: side, right: side - SCROLLBAR }
+}
 
 export default function AgentRails({ hostRef, provider }) {
   const feed = useAgentFeed(provider)
-  const [box, setBox] = useState({ w: 0, h: 0 })
+  const [box, setBox] = useState({ w: 0, left: 0, right: 0 })
   const [selected, setSelected] = useState(null)
   const [drawer, setDrawer] = useState(false)
   const [pinned, setPinned] = useState(null)     // trace shown in the flow card
@@ -23,55 +38,57 @@ export default function AgentRails({ hostRef, provider }) {
   useEffect(() => {
     const el = hostRef.current
     if (!el) return undefined
-    const ro = new ResizeObserver(([e]) => {
-      const r = e.contentRect
-      setBox({ w: r.width, h: r.height })
-    })
+    const update = () => setBox(measure(el))
+    const ro = new ResizeObserver(update)
     ro.observe(el)
-    return () => ro.disconnect()
+    const paper = el.querySelector('[data-paper]') || el.querySelector('.ruled')
+    if (paper) ro.observe(paper)
+    const raf = requestAnimationFrame(update)
+    return () => { ro.disconnect(); cancelAnimationFrame(raf) }
   }, [hostRef])
 
-  const paper = Math.min(box.w * 0.94, PAPER_MAX)
-  const side = (box.w - paper) / 2
-  const rail = Math.min(side - GAP * 2, MAX_RAIL)
-  const wide = rail >= MIN_RAIL
+  const leftW = Math.min(box.left - GAP * 2, MAX_RAIL)
+  const rightW = Math.min(box.right - GAP * 2, MAX_RAIL)
+  const showLeft = leftW >= MIN_RAIL
+  const showRight = rightW >= MIN_RAIL
 
   const toggle = (id) => setSelected((s) => (s === id ? null : id))
 
   if (!box.w) return null
 
-  if (wide) {
-    return (
-      <>
+  const running = Object.keys(feed.running).length
+  return (
+    <>
+      {showLeft && (
         <aside className="pointer-events-auto absolute bottom-4 top-4 z-10 flex flex-col"
-               style={{ left: GAP, width: rail }}>
+               style={{ left: GAP, width: leftW }}>
           <GraphCard feed={feed} selected={selected} onSelect={toggle} />
         </aside>
+      )}
+      {showRight && (
         <aside className="pointer-events-auto absolute bottom-4 top-4 z-10 flex flex-col gap-3"
-               style={{ right: GAP + 6, width: rail }}>
+               style={{ right: GAP + SCROLLBAR, width: rightW }}>
           <FlowCard feed={feed} pinned={pinned} onUnpin={() => setPinned(null)}
-                    className="max-h-[55%] shrink-0" />
+                    className="max-h-[60%] shrink-0" />
           <div className="flex min-h-0 flex-1 flex-col">
             <LogCard feed={feed} selected={selected} onPinRun={setPinned}
                      onClearFilter={() => setSelected(null)} />
           </div>
         </aside>
-      </>
-    )
-  }
+      )}
 
-  const running = Object.keys(feed.running).length
-  return (
-    <>
-      <button onClick={() => setDrawer(true)}
-              className="absolute bottom-4 left-4 z-20 inline-flex items-center gap-2
-                         rounded-full bg-paper px-3 py-1.5 text-xs shadow-md ring-1
-                         ring-black/10 hover:bg-white">
-        <span className={`inline-block h-2 w-2 rounded-full ${
-          running ? 'agent-dot-live bg-accent' : 'bg-ink-soft/40'}`} />
-        Agents{running ? ` · ${running} running` : ''}
-      </button>
-      {drawer && (
+      {/* whatever does not fit beside the page opens from this button */}
+      {!showLeft && (
+        <button onClick={() => setDrawer(true)}
+                className="absolute bottom-4 left-4 z-20 inline-flex items-center gap-2
+                           rounded-full bg-paper px-3 py-1.5 text-xs shadow-md ring-1
+                           ring-black/10 hover:bg-white">
+          <span className={`inline-block h-2 w-2 rounded-full ${
+            running ? 'agent-dot-live bg-accent' : 'bg-ink-soft/40'}`} />
+          {showRight ? 'Agent graph' : 'Agents'}{running ? ` · ${running} running` : ''}
+        </button>
+      )}
+      {drawer && !showLeft && (
         <div className="absolute inset-0 z-30 flex justify-end bg-black/15"
              onClick={() => setDrawer(false)}>
           <div className="scroll-thin flex h-full w-[min(420px,100%)] flex-col gap-3
@@ -79,15 +96,19 @@ export default function AgentRails({ hostRef, provider }) {
                onClick={(e) => e.stopPropagation()}>
             <button onClick={() => setDrawer(false)}
                     className="self-end text-xs text-ink-soft hover:underline">close</button>
-            <FlowCard feed={feed} pinned={pinned} onUnpin={() => setPinned(null)}
-                      className="shrink-0" />
+            {!showRight && (
+              <FlowCard feed={feed} pinned={pinned} onUnpin={() => setPinned(null)}
+                        className="shrink-0" />
+            )}
             <div className="shrink-0">
               <GraphCard feed={feed} selected={selected} onSelect={toggle} />
             </div>
-            <div className="flex h-[60vh] shrink-0 flex-col">
-              <LogCard feed={feed} selected={selected} onPinRun={setPinned}
-                       onClearFilter={() => setSelected(null)} />
-            </div>
+            {!showRight && (
+              <div className="flex h-[60vh] shrink-0 flex-col">
+                <LogCard feed={feed} selected={selected} onPinRun={setPinned}
+                         onClearFilter={() => setSelected(null)} />
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -172,6 +193,7 @@ function AgentGraph({ feed, selected, onSelect }) {
   const orchBottom = ROW_Y0 + (agents.length - 1) * ROW_STEP + ROW_H
   const H = orchBottom + 12
   const orchLive = activeRuns.length > 0
+  const upcoming = nowNext(runFlow(feed.events, feed.lastRun, topo.flows)).next?.agent
 
   const edgeClass = (key) => (edges[key] === 'live' ? 'edge-live'
     : edges[key] === 'fading' ? 'edge-fading' : '')
@@ -278,11 +300,13 @@ function AgentGraph({ feed, selected, onSelect }) {
         const planned = a.status === 'planned'
         const live = !!running[a.id]
         const f = flash[a.id]
+        const isNext = !live && !f && upcoming === a.id
         const color = AGENT_COLORS[a.id] || '#46557a'
         const stroke = live ? color
           : f === 'error' ? '#d03b3b'
             : f === 'ok' ? '#0ca30c'
-              : selected === a.id ? '#fab219' : '#d9d3c4'
+              : selected === a.id ? '#fab219'
+                : isNext ? color : '#d9d3c4'
         const s = stats[a.id]
         const model = modelOf(a)
         return (
@@ -291,8 +315,8 @@ function AgentGraph({ feed, selected, onSelect }) {
             <title>{`${a.name}\n${a.role}\nInvoked by: ${a.invoked_by}`}</title>
             <rect x={NODE_X} y={y} width={NODE_W} height={ROW_H} rx={10}
                   fill={live ? `${color}12` : '#fff'} stroke={stroke}
-                  strokeWidth={live || f || selected === a.id ? 2.2 : 1}
-                  strokeDasharray={planned ? '4 3' : undefined}
+                  strokeWidth={live || f || selected === a.id ? 2.2 : isNext ? 1.6 : 1}
+                  strokeDasharray={planned || isNext ? '4 3' : undefined}
                   className={live ? 'node-live' : ''} />
             <circle cx={NODE_X + 14} cy={y + 17} r={5} fill={color} />
             <text x={NODE_X + 26} y={y + 21} fontSize="12" fontWeight="650" fill="#16213a">
@@ -303,9 +327,9 @@ function AgentGraph({ feed, selected, onSelect }) {
               {model.length > 30 ? `${model.slice(0, 29)}…` : model}
             </text>
             <text x={NODE_X + NODE_W - 10} y={y + 21} fontSize="10" textAnchor="end"
-                  fill={live ? color : f === 'error' ? '#d03b3b' : '#46557a'}
-                  fontWeight={live ? 600 : 400}>
-              {live ? 'running…' : f === 'error' ? 'failed'
+                  fill={live || isNext ? color : f === 'error' ? '#d03b3b' : '#46557a'}
+                  fontWeight={live || isNext ? 600 : 400}>
+              {live ? 'running…' : f === 'error' ? 'failed' : isNext ? 'next'
                 : s ? `${s.calls}×` : planned ? '' : 'idle'}
             </text>
             {!live && s?.last_ms != null && (
@@ -442,6 +466,7 @@ function FlowCard({ feed, pinned, onUnpin, className = '' }) {
   const trace = (pinned && feed.events.some((e) => e.trace === pinned)) ? pinned : feed.lastRun
   const run = runFlow(feed.events, trace, flows)
   const isPinned = run && pinned === run.trace
+  const nn = nowNext(run)
 
   const status = run?.status
   const chip = !run ? null
@@ -465,6 +490,7 @@ function FlowCard({ feed, pinned, onUnpin, className = '' }) {
             </>
           )}>
       <div className="scroll-thin min-h-0 overflow-y-auto px-3 pb-3 pt-2">
+        <NowNext nn={nn} now={feed.now} />
         {run ? (
           <>
             <div className="mb-2 flex items-baseline gap-1.5 text-[10px] uppercase tracking-wide
@@ -513,13 +539,53 @@ function FlowCard({ feed, pinned, onUnpin, className = '' }) {
           </>
         ) : (
           <p className="pb-1 text-[11px] leading-4 text-ink-soft">
-            Each step of your next request will light up here as the orchestrator
+            Each step of the next request lights up here as the orchestrator
             routes it between agents.
           </p>
         )}
         {flows && <AllFlows flows={flows} current={run?.flow.id} />}
       </div>
     </Card>
+  )
+}
+
+function NowNext({ nn, now }) {
+  const label = 'w-9 shrink-0 text-[9.5px] font-bold uppercase tracking-wider text-ink-soft'
+  return (
+    <div className="mb-3 overflow-hidden rounded-md ring-1 ring-black/5">
+      <div className={`flex items-center gap-2 px-2.5 py-2 ${
+        nn.now ? 'bg-blue-50' : nn.failed ? 'bg-red-50' : 'bg-black/[0.03]'}`}>
+        <span className={label}>Now</span>
+        {nn.now ? (
+          <>
+            <span className="agent-dot-live inline-block h-2 w-2 shrink-0 rounded-full"
+                  style={{ background: AGENT_COLORS[nn.now.agent] }} />
+            <AgentTag id={nn.now.agent} />
+            <span className="min-w-0 flex-1 text-[12px] font-medium leading-4 text-ink">
+              {nn.now.label}
+            </span>
+            {nn.now.t0 && (
+              <span className="shrink-0 text-[10px] tabular-nums text-ink-soft">
+                {fmtMs(Math.max(0, Math.round(now - nn.now.t0 * 1000)))}
+              </span>
+            )}
+          </>
+        ) : (
+          <span className={`text-[12px] leading-4 ${nn.failed ? 'text-red-700' : 'text-ink-soft'}`}>
+            {nn.waiting}
+          </span>
+        )}
+      </div>
+      {nn.next && (
+        <div className="flex items-center gap-2 border-t border-black/5 bg-white/60 px-2.5 py-2">
+          <span className={label}>Next</span>
+          <AgentTag id={nn.next.agent} />
+          <span className="min-w-0 flex-1 text-[11.5px] leading-4 text-ink-soft">
+            {nn.next.label}
+          </span>
+        </div>
+      )}
+    </div>
   )
 }
 

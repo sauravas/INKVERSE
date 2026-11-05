@@ -151,6 +151,55 @@ export function useAgentFeed(provider) {
   return { events, status, topo, now, ...derived }
 }
 
+// What the student can do once a flow has finished.
+const NEXT_FLOW = {
+  read: { flow: 'solve', agent: 'tutor',
+          text: 'Solve: confirm the question to send it to the Tutor' },
+  solve: { flow: 'explain', agent: 'explainer',
+           text: 'Ask about a step: select a step to call the Explainer' },
+  explain: { flow: 'explain', agent: 'explainer',
+             text: 'Ask about another step, or save the question to the dashboard' },
+  dashboard: { flow: 'read', agent: 'reader',
+               text: 'Read a page: write a question and press Solve' },
+}
+
+/**
+ * Who is working right now and what happens next, for one rebuilt run.
+ * Returns {now: {agent, label, t0}|null, next: {agent, label}|null, waiting}.
+ */
+export function nowNext(run) {
+  if (!run) {
+    return { now: null, waiting: 'Waiting for a question',
+             next: { agent: 'reader', label: NEXT_FLOW.dashboard.text } }
+  }
+  const i = run.steps.findIndex((s) => s.state === 'running')
+  if (run.status === 'running') {
+    const cur = i >= 0 ? run.steps[i] : null
+    const from = i >= 0 ? i + 1 : run.steps.findIndex((s) => s.state === 'pending')
+    const nxt = from >= 0 ? run.steps.slice(from).find((s) => s.state === 'pending') : null
+    return {
+      now: cur ? { agent: cur.agent, label: cur.label, t0: cur.t0 }
+        : { agent: 'orchestrator', label: 'Routing the request' },
+      next: nxt ? { agent: nxt.agent, label: nxt.label }
+        : { agent: 'orchestrator', label: 'Finish the run' },
+    }
+  }
+  if (run.status === 'error') {
+    const bad = run.steps.find((s) => s.state === 'error')
+    return { now: null, waiting: `Failed at: ${bad ? bad.label : run.flow.name}`,
+             failed: true,
+             next: { agent: run.steps.find((s) => s.agent !== 'orchestrator')?.agent
+                     || 'orchestrator', label: `Retry: ${run.flow.name}` } }
+  }
+  const n = NEXT_FLOW[run.flow.id]
+  return {
+    now: null,
+    waiting: run.flow.id === 'read' ? 'Waiting for you to confirm the question'
+      : `${run.flow.name} finished`,
+    next: n ? { agent: n.agent, label: n.text } : null,
+  }
+}
+
 /**
  * Rebuild one run's orchestration flow from its events.
  *
