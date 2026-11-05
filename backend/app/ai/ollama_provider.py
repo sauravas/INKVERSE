@@ -244,16 +244,49 @@ class OllamaProvider:
             "to the \"heavy\" provider or restart `ollama serve`.")
 
     # -- stage 1: vision ---------------------------------------------------
+    async def _complete(self, model: str, messages, *, attempts=5,
+                        **kw) -> str:
+        """Buffered request that restarts from scratch on a runner crash.
+
+        _stream_chat cannot retry once it has yielded tokens, because for
+        solve/explain those tokens are already on the student's screen. A
+        buffered caller has shown nothing yet, so a crash part-way through the
+        reply is safe to retry - and on this hardware that is the common case:
+        the vision runner often dies after emitting a few tokens.
+        """
+        last = ""
+        for attempt in range(attempts):
+            acc: list[str] = []
+            try:
+                async for piece in self._stream_chat(model, messages,
+                                                     attempts=1, **kw):
+                    acc.append(piece)
+                return "".join(acc)
+            except ProviderError as e:
+                last = str(e)
+                if not self._is_runner_crash(last) or attempt == attempts - 1:
+                    break
+            await asyncio.sleep(2.5 * (attempt + 1))
+            try:
+                await self.unload(model)
+            except Exception:
+                pass
+        if self._is_runner_crash(last):
+            raise ProviderError(
+                f"{model} crashed {attempts} times in a row on this machine's "
+                "GPU driver and could not recover. This is usually transient - "
+                "wait a few seconds and press Solve again. If it keeps "
+                "happening, restart `ollama serve`.")
+        raise ProviderError(last)
+
     async def _read_once(self, image_b64: str, user: str, temp: float) -> dict:
-        acc = []
-        async for piece in self._stream_chat(
+        raw = await self._complete(
             self.vision_model,
             [{"role": "system", "content": prompts.EXTRACT_SYSTEM},
              {"role": "user", "content": user, "images": [image_b64]}],
             num_predict=600, temp=temp,
-        ):
-            acc.append(piece)
-        return prompts.parse_extraction("".join(acc))
+        )
+        return prompts.parse_extraction(raw)
 
     async def extract(self, image_b64: str, hint: str = "",
                       verify: bool | None = None) -> dict:
