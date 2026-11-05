@@ -93,6 +93,68 @@ See [`.env.example`](.env.example) for every setting.
 
 ---
 
+## Agents and orchestration
+
+INKWISE runs **five agents**, each with exactly one job. A sixth, the
+Examiner, is registered as *planned* and is never called.
+
+| Agent | Job | Backed by | Called when |
+|---|---|---|---|
+| **Reader** | Transcribe the handwritten page into an editable question | vision model | Solve is pressed; or the Explainer gets a handwritten follow-up |
+| **Verifier** | Read the page again, independently, and flag disagreement | vision model | the Reader's question contains digits or maths |
+| **Tutor** | Stream a step-by-step solution | text model | the student confirms the question |
+| **Explainer** | Explain one selected step, never the whole answer again | text model | the student asks about a step |
+| **Mentor** | Exam readiness and the named blockers | rules over SQLite, **no model** | the dashboard opens |
+| Examiner *(planned)* | Mark the student's own handwritten attempt | text model | not built yet |
+
+**The orchestrator is code, not a model.** Routing is deterministic: no LLM
+decides which agent runs. The orchestrator ([`backend/app/agents.py`](backend/app/agents.py),
+called from [`routers/ai.py`](backend/app/routers/ai.py)) owns:
+
+- the **consent gate**: a cloud provider is refused until the student consents
+- **blank-page and crop** checks before any model is touched
+- **routing and hand-offs**:
+  - read = Reader -> Verifier (if digits) -> student review
+  - solve = Tutor -> parser -> typed events
+  - ask = Reader (if handwritten) -> Explainer
+  - dashboard = Mentor
+- **model scheduling**, through the provider: one stage resident at a time,
+  RAM guard, crash retry
+
+```
+Student --> Orchestrator --+--> Reader --(digits)--> Verifier    vision model
+ (canvas,   (code: consent, |       ^
+  phone)     crop, routing, +--> Tutor                            text model
+             scheduling)    +--> Explainer --(handwritten ask)    text model
+                            +--> Mentor                           SQLite, rules
+                            +..> Examiner (planned)
+```
+
+### Live observability
+
+Every request is one **run** (a trace id). Each agent invocation inside it is a
+**span**. Runs, spans, routing decisions, model calls (warm or cold),
+evictions, retries, RAM-guard blocks and consent blocks are emitted as typed
+events by [`backend/app/obs.py`](backend/app/obs.py). The buffer is in memory
+and bounded. Events carry only short previews of questions, never images.
+
+| Endpoint | What |
+|---|---|
+| `GET /api/obs/agents` | agent count, graph edges, the models behind each stage, per-agent call stats |
+| `GET /api/obs/stream` | server-sent events: recent buffer replayed, then live |
+| `GET /api/obs/recent` | the buffer as JSON |
+
+In the notebook, the empty desk space beside the page shows them:
+
+- **left margin**: the orchestration graph. Nodes pulse while running and edges
+  animate along the route taken. Each node shows its call count and last latency.
+- **right margin**: the live agent log, grouped by run. Click a node to filter it.
+
+On a window too narrow for side margins, both open from an **Agents** button
+instead.
+
+---
+
 ## The three rules this is built on
 
 Spelled out in [`ARCHITECTURE.md`](ARCHITECTURE.md), and enforced:
@@ -150,21 +212,25 @@ their thresholds, and every failure is listed as a named blocker.
 ```
 backend/app/
   main.py          FastAPI app, WebSocket endpoint, serves the built frontend
+  agents.py        the five agents, topology, orchestration flows
+  obs.py           observability event bus (runs, spans, model events)
   readiness.py     deterministic progress maths (pure, no I/O)
   ws.py            shared-workspace stroke sync hub
   imaging.py       ink-bbox cropping before vision
   resources.py     RAM guard
   ai/
     registry.py    provider selection
-    ollama_provider.py   two-stage local orchestrator
+    ollama_provider.py   two-stage local pipeline + model scheduling
     gemini_provider.py   optional cloud provider
     parser.py      model stream -> typed events
     prompts.py
-  routers/         ai, study, notebook, pair
+  routers/         ai, study, notebook, pair, obs
 frontend/src/
   lib/ink.js       stroke geometry, pressure, rendering, PNG export
   lib/sync.js      WebSocket client with backoff
-  components/      InkCanvas, AnswerSheet, Dashboard, MiniPad, PairPanel
+  lib/obs.js       live agent feed (SSE) and derived graph state
+  components/      InkCanvas, AnswerSheet, Dashboard, MiniPad, PairPanel,
+                   AgentRails (agent graph + log in the page margins)
 bench/             benchmarks and end-to-end tests
 ```
 
@@ -176,6 +242,7 @@ With the backend running on :8000:
 
 ```powershell
 .\.venv\Scripts\python.exe bench\test_parser.py     # stream parser, chunk-boundary safety
+.\.venv\Scripts\python.exe bench\test_agents.py     # orchestration + observability (no server, no Ollama)
 .\.venv\Scripts\python.exe bench\test_sync.py       # two clients, one workspace
 .\.venv\Scripts\python.exe bench\seed_demo.py       # readiness rules + demo data
 .\.venv\Scripts\python.exe bench\test_pipeline.py   # full AI pipeline (needs Ollama)
