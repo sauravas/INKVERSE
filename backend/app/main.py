@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, db, resources
+from . import config, db, resources, speech
 from .routers import ai, imports, notebook, notes, pair, practice, study
 from .ws import hub
 
@@ -48,6 +48,17 @@ async def status():
         "rooms": {rid: {"pages": len(r.pages), "peers": len(r.clients)}
                   for rid, r in hub.rooms.items()},
     }
+
+
+@app.get("/api/speech/status")
+async def speech_status():
+    return await speech.status()
+
+
+@app.websocket("/ws/speech")
+async def speech_ws(ws: WebSocket, subject_id: str | None = None):
+    """Voice input: relayed to the local whisperflow sidecar."""
+    await speech.relay(ws, subject_id)
 
 
 @app.websocket("/ws/{room}")

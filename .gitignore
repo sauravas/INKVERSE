@@ -19,3 +19,6 @@ bench/math_images/
 bench/*.log
 bench/*.json
 bench/shot-*.png
+
+# whisperflow sidecar environment (PyTorch etc.; recreated by start.ps1)
+speech/.venv/
