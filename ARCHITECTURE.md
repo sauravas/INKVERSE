@@ -26,3 +26,18 @@ Exam readiness, syllabus completion and recall accuracy are computed in SQL/Pyth
 from real rows (question status, revision counts, recall attempts). The model is
 never asked whether a student is ready. See `backend/app/readiness.py` — pure
 functions, unit-testable, no network.
+
+## Local-first, and its two deliberate exceptions
+Everything runs on this machine by default. Two features can send data out, and
+both are opt-in with an explicit prompt the first time:
+- the Gemini provider (sends the handwritten page), and
+- web search (sends the question text to Wikipedia and DuckDuckGo; never
+  handwriting or imported notes).
+Sharing notes never involves a server outside the LAN: it is a local link, or a
+file the student hands over.
+
+## Constraint 3 applies to the question bank too
+Practice outcomes are chosen by the student (knew it / needed a hint / needed the
+answer). Status and recall change by fixed rules in `routers/practice.py`. A
+friend's imported notes start with zero progress, so they cannot inflate
+readiness.

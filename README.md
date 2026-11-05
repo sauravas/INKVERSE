@@ -143,6 +143,63 @@ Mastered, with important flags and active-recall logging. EXAM READY appears onl
 when syllabus coverage, important-question mastery and recall accuracy all clear
 their thresholds, and every failure is listed as a named blocker.
 
+### Two notebooks
+
+**Notebook** is the free page: write any question, solve it, annotate it.
+
+**Question bank** works through a module one question at a time. *Start module*
+and the first question is written onto the page; you answer underneath, by pen or
+from your phone. Stuck? **One hint first** - a nudge toward the method, never the
+answer. Still stuck? **The worked answer** is written in below, and every step can
+be annotated as usual. Press *Done*, say how it went (knew it / needed the hint /
+needed the answer - preselected from what you used), and move on. The session
+resumes where you left off.
+
+Every attempt is kept: your handwriting, the hint and the answer. Progress moves
+by fixed rules, not AI judgement - the first pass makes a question *Studied*,
+later passes make it *Revised*, and each finish logs one recall attempt from the
+outcome you chose. *Mastered* stays your own call.
+
+### Importing question banks and syllabi
+
+**Import** takes PDF, DOCX, TXT, or a photo/scan of a printed page. Pages with a
+text layer are read directly; scanned pages go through **Tesseract** OCR (found
+automatically in its usual install folder; set `INKWISE_TESSERACT` otherwise).
+The parser proposes modules (`Module 2`, `Unit III: ...`, `Chapter 4`) and
+questions (`Q1.`, `1)`, `(a)`, continuation lines, `[5 marks]`), drops
+instructions like *"Attempt any two"*, and shows you the result to correct
+**before** anything is saved. Re-importing the same paper does not duplicate it.
+
+Tesseract reads printed text, not handwriting, and it loses superscripts: `x^2`
+can come out as `x2`. The review step is where you fix that - you can write maths
+as `$x^2$`.
+
+Everything imported is indexed (SQLite FTS5, BM25 - no extra model on the GPU),
+and answers, hints and step explanations for questions in that subject are
+**grounded in your own material**. Each answer shows which module notes it used.
+
+### Notes, and sharing them
+
+Each module's **Notes** collect the question, your handwritten answer, the hint,
+the worked answer and your margin annotations, in order - your revision notes.
+*Print / PDF* gives a clean printout.
+
+*Share with friends* makes a read-only link with a QR code for anyone on the same
+Wi-Fi, which you can turn off at any time. Not on the same network? *Export file*
+gives an `.inkwise.json` they open with *Question bank -> Open a friend's notes*.
+Shared notes land in their own subject, labelled *"Shared by ..."*, with progress
+starting at zero - a friend's record never counts toward your readiness.
+
+### Web search (off by default)
+
+The **Web** toggle in the top bar looks factual questions up on Wikipedia and
+DuckDuckGo before answering, for current information the local model may not
+know (it once answered "Who is Virat ..." about a different person entirely). It
+asks before it is first turned on, because it sends the question text off this
+machine - never your handwriting or notes. Calculations and proofs skip it, since
+stripped of their maths they only search for noise. Sources appear as links
+under the answer.
+
 ---
 
 ## Layout
@@ -160,11 +217,16 @@ backend/app/
     gemini_provider.py   optional cloud provider
     parser.py      model stream -> typed events
     prompts.py
-  routers/         ai, study, notebook, pair
+  ingest.py        text extraction (PDF/DOCX/images via Tesseract) + parser
+  retrieval.py     FTS5 grounding in imported material
+  websearch.py     optional Wikipedia / DuckDuckGo lookup
+  routers/         ai, study, notebook, pair, imports, practice, notes
 frontend/src/
   lib/ink.js       stroke geometry, pressure, rendering, PNG export
   lib/sync.js      WebSocket client with backoff
-  components/      InkCanvas, AnswerSheet, Dashboard, MiniPad, PairPanel
+  lib/api.js       REST + typed-event streaming
+  components/      InkCanvas, AnswerSheet, StepTools, PenTools, MiniPad,
+                   PracticeView, ImportView, NotesView, Dashboard, PairPanel
 bench/             benchmarks and end-to-end tests
 ```
 
@@ -175,11 +237,22 @@ bench/             benchmarks and end-to-end tests
 With the backend running on :8000:
 
 ```powershell
-.\.venv\Scripts\python.exe bench\test_parser.py     # stream parser, chunk-boundary safety
-.\.venv\Scripts\python.exe bench\test_sync.py       # two clients, one workspace
-.\.venv\Scripts\python.exe bench\seed_demo.py       # readiness rules + demo data
-.\.venv\Scripts\python.exe bench\test_pipeline.py   # full AI pipeline (needs Ollama)
-node frontend\shot.mjs                              # screenshots all three screens
+# fast, no model needed
+.\.venv\Scripts\python.exe bench\test_parser.py          # stream parser, chunk-boundary safety
+.\.venv\Scripts\python.exe bench\test_retry.py           # runner-crash recovery (simulated)
+.\.venv\Scripts\python.exe bench\test_ingest.py          # import parser + Tesseract OCR
+.\.venv\Scripts\python.exe bench\test_sync.py            # two clients, one workspace
+.\.venv\Scripts\python.exe bench\test_import_api.py      # import -> commit -> retrieve
+.\.venv\Scripts\python.exe bench\test_practice_notes.py  # practice, notes, sharing, bundles
+.\.venv\Scripts\python.exe bench\seed_demo.py            # readiness rules + demo data
+node frontend\phase2-e2e.mjs                             # browser: import -> answer -> share
+node frontend\test-strokes.mjs                           # browser: pen strokes reach the server
+node frontend\gap-check.mjs                              # browser: answer follows the question
+
+# need Ollama (slow)
+.\.venv\Scripts\python.exe bench\test_pipeline.py        # handwriting -> answer -> explanation
+.\.venv\Scripts\python.exe bench\test_hint_live.py       # hint helps without giving it away
+.\.venv\Scripts\python.exe bench\test_web_live.py        # web grounding (needs internet)
 ```
 
 ---
@@ -202,6 +275,15 @@ restart `ollama serve`.
 double-read catches many cases and will show you both readings; otherwise fix it
 in the review box before solving, or switch to the `heavy` provider.
 
+**Import says Tesseract was not found.** It is looked for on PATH and in
+`C:\Program Files\Tesseract-OCR`. Install it (the UB Mannheim build), or set
+`INKWISE_TESSERACT` to the full path of `tesseract.exe`. Text PDFs, DOCX and TXT
+import without it.
+
+**A friend cannot open a share link.** Same rules as the phone: the same Wi-Fi,
+and port 8000 allowed through the firewall on private networks. Otherwise send
+them the exported file.
+
 **Transcription feels slow (around a minute).** Two things are in play: the
 verification pass doubles the vision work, and stage exclusivity means a model
 reload between transcribing and solving. Set `INKWISE_VERIFY_MATH=0` and/or
@@ -209,11 +291,9 @@ reload between transcribing and solving. Set `INKWISE_VERIFY_MATH=0` and/or
 
 ---
 
-## Planned next
+## Not built yet
 
-- **Web search** so answers can draw on current information.
-- **RAG over your own syllabus** — import module notes and past papers, and
-  ground answers in them.
-- **Two notebooks**: the current free-form one, plus a question-bank notebook
-  that shows a prewritten question, lets you attempt it first, offers AI help
-  only if you want it, and keeps your annotated attempts as revision notes.
+- Marking handwritten **answers** automatically. Outcomes are self-reported on
+  purpose: an AI grade feeding readiness would break the rule that progress is
+  deterministic.
+- Accounts or cloud sync. Sharing is LAN links and files by design.
