@@ -1,0 +1,158 @@
+// Live agent observability feed.
+//
+// Subscribes to GET /api/obs/stream (server-sent events). The server replays
+// its recent buffer on connect, so the view is complete even after a reload.
+// Everything shown in the agent graph and log is derived from these events;
+// nothing here can affect the notebook.
+
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { api } from './api'
+
+export const AGENT_COLORS = {
+  orchestrator: '#16213a',
+  reader: '#2f6fed',
+  verifier: '#7c3aed',
+  tutor: '#0f766e',
+  explainer: '#c2410c',
+  mentor: '#a16207',
+  examiner: '#8a94a8',
+}
+
+export const AGENT_SHORT = {
+  orchestrator: 'Orchestrator',
+  reader: 'Reader',
+  verifier: 'Verifier',
+  tutor: 'Tutor',
+  explainer: 'Explainer',
+  mentor: 'Mentor',
+  examiner: 'Examiner',
+}
+
+const MAX_EVENTS = 400
+const FLASH_MS = 1800
+
+export function useAgentFeed(provider) {
+  const [events, setEvents] = useState([])
+  const [status, setStatus] = useState('connecting')
+  const [topo, setTopo] = useState(null)
+  const [seedResident, setSeedResident] = useState([])
+  const [now, setNow] = useState(() => Date.now())
+  const lastSeq = useRef(0)
+  const statsTimer = useRef(null)
+
+  const refreshTopo = useMemo(() => () => {
+    clearTimeout(statsTimer.current)
+    statsTimer.current = setTimeout(() => {
+      fetch(`/api/obs/agents${provider ? `?provider=${provider}` : ''}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((t) => t && setTopo(t))
+        .catch(() => {})
+    }, 250)
+  }, [provider])
+
+  // the stream must not reconnect when the provider changes, so it calls the
+  // latest refresher through a ref
+  const refreshRef = useRef(refreshTopo)
+  useEffect(() => { refreshRef.current = refreshTopo; refreshTopo() }, [refreshTopo])
+
+  useEffect(() => {
+    api.memory().then((m) => setSeedResident(m.loaded || [])).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    const es = new EventSource('/api/obs/stream')
+    es.onopen = () => {
+      // a (re)connect replays the server buffer; start clean so a restarted
+      // server, whose sequence numbers begin again at 1, is not filtered out
+      lastSeq.current = 0
+      setEvents([])
+      setStatus('live')
+    }
+    es.onerror = () => setStatus('offline')   // EventSource retries by itself
+    es.onmessage = (m) => {
+      let ev
+      try { ev = JSON.parse(m.data) } catch { return }
+      if (!ev || ev.seq <= lastSeq.current) return
+      lastSeq.current = ev.seq
+      setEvents((prev) => {
+        const next = prev.length >= MAX_EVENTS ? prev.slice(-MAX_EVENTS + 1) : prev.slice()
+        next.push(ev)
+        return next
+      })
+      if (ev.kind === 'agent.end') refreshRef.current()
+    }
+    return () => es.close()
+  }, [])
+
+  // derive live state from the event list
+  const derived = useMemo(() => {
+    const running = {}          // agent -> {count, message, since}
+    const runs = {}             // trace -> run.start event
+    const lastEnd = {}          // agent -> agent.end event
+    const liveEdges = {}        // "from>to" -> ts
+    const resident = new Set(seedResident)
+    for (const ev of events) {
+      const a = ev.agent
+      if (ev.kind === 'agent.start') {
+        const r = running[a] || { count: 0 }
+        running[a] = { count: r.count + 1, message: ev.message, since: ev.ts }
+        liveEdges[`${ev.data?.caller || 'orchestrator'}>${a}`] = ev.ts
+      } else if (ev.kind === 'agent.end') {
+        if (running[a]) {
+          running[a].count -= 1
+          if (running[a].count <= 0) delete running[a]
+        }
+        lastEnd[a] = ev
+      } else if (ev.kind === 'run.start') {
+        runs[ev.trace] = ev
+      } else if (ev.kind === 'run.end') {
+        delete runs[ev.trace]
+      } else if (ev.kind === 'model.call' && ev.data?.model) {
+        resident.add(ev.data.model)
+      } else if (ev.kind === 'model.evict') {
+        if (ev.data?.model) resident.delete(ev.data.model)
+        for (const m of ev.data?.models || []) resident.delete(m)
+      }
+    }
+    // an edge stays lit while its target runs, then fades out
+    const edges = {}
+    for (const [key, ts] of Object.entries(liveEdges)) {
+      const to = key.split('>')[1]
+      const ended = lastEnd[to]
+      const done = ended && ended.ts >= ts
+      if (!done || now - ended.ts * 1000 < FLASH_MS) edges[key] = done ? 'fading' : 'live'
+    }
+    const flash = {}
+    for (const [a, ev] of Object.entries(lastEnd)) {
+      const age = now - ev.ts * 1000
+      const status = ev.data?.status
+      if (status === 'error' && age < FLASH_MS * 2.5) flash[a] = 'error'
+      else if (status !== 'error' && age < FLASH_MS) flash[a] = status === 'cancelled' ? 'cancelled' : 'ok'
+    }
+    return {
+      running, flash, edges, resident,
+      activeRuns: Object.values(runs),
+    }
+  }, [events, now, seedResident])
+
+  // tick only while something is animating, so an idle notebook does no work
+  const animating = Object.keys(derived.running).length > 0
+    || Object.keys(derived.flash).length > 0 || Object.keys(derived.edges).length > 0
+  useEffect(() => {
+    if (!animating) return undefined
+    const t = setInterval(() => setNow(Date.now()), 400)
+    return () => clearInterval(t)
+  }, [animating])
+
+  return { events, status, topo, ...derived }
+}
+
+export function fmtTime(ts) {
+  const d = new Date(ts * 1000)
+  return d.toTimeString().slice(0, 8)
+}
+
+export function fmtMs(ms) {
+  if (ms == null) return ''
+  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`
+}
