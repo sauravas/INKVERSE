@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import AnswerSheet, { RichText, stepToText, stepsToText } from './components/AnswerSheet'
+import CircleLayer, { CircleToggle } from './components/CircleLayer'
 import Dashboard from './components/Dashboard'
 import ImportView from './components/ImportView'
 import InkCanvas from './components/InkCanvas'
@@ -93,6 +94,9 @@ export default function App() {
   const [questionId, setQuestionId] = useState(null)
   const [selectedStep, setSelectedStep] = useState(null)
   const [toast, setToast] = useState(null)
+  const [circling, setCircling] = useState(false)
+  const [missed, setMissed] = useState(false)
+  const answerRef = useRef(null)
   const abortRef = useRef(null)
 
   useEffect(() => {
@@ -373,9 +377,20 @@ export default function App() {
                           reading your handwriting…
                         </span>
                       )}
+                      {steps.length > 0 && (
+                        <CircleToggle on={circling} missed={missed}
+                                      onChange={(v) => { setCircling(v); setMissed(false) }} />
+                      )}
                     </div>
                     <SourcesNote items={sources} notices={notices} />
 
+                    <div ref={answerRef} className="relative">
+                    <CircleLayer active={circling} resetKey={questionText}
+                                 onCircle={(poly) => {
+                                   const ok = ask.circled(answerRef.current, poly)
+                                   setMissed(!ok)
+                                   if (ok) setCircling(false)
+                                 }} />
                     <AnswerSheet
                       steps={steps}
                       streaming={phase === 'solving'}
@@ -387,6 +402,7 @@ export default function App() {
                       afterStep={ask.afterStep}
                       onAskBlock={ask.askBlock}
                     />
+                    </div>
                   </div>
                 )}
 

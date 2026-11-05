@@ -61,6 +61,8 @@ class ExplainIn(BaseModel):
     ask_image: str | None = None
     # earlier turns about this same step: [{"ask": ..., "answer": ...}]
     history: list[dict] = []
+    # what the student circled inside the step (labels, formulas, words)
+    focus: str = ""
     question_id: str | None = None
     provider: str | None = None
     consent_cloud: bool = False
@@ -228,7 +230,7 @@ async def explain(body: ExplainIn):
 
     context, used = retrieval.context_for(f"{ask}\n{body.step}", body.question_id)
     agen = p.explain(body.question, body.answer, body.step, ask, context,
-                     body.history)
+                     body.history, body.focus)
 
     async def gen():
         yield _sse({"type": "ask", "value": ask, "explanation_id": eid})

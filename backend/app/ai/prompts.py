@@ -215,7 +215,7 @@ The full solution that was given:
 
 The student has selected this step:
 "{step}"
-{history_block}
+{focus_block}{history_block}
 Their follow-up question about that step:
 "{ask}"
 
@@ -241,6 +241,15 @@ HINT_USER = """{context_block}The student is stuck on this question:
 
 Give one hint that points them at the right idea without solving it.
 """
+
+
+def focus_block(focus: str) -> str:
+    """What the student circled inside the step, so the answer is about that."""
+    focus = (focus or "").strip()
+    if not focus:
+        return ""
+    return ("\nThe student circled this part of the step - answer about it "
+            f"specifically:\n{focus[:600]}\n")
 
 
 def history_block(turns: list[dict]) -> str:

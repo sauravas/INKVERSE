@@ -150,6 +150,7 @@ function MathSpan({ value, display }) {
   }
   return (
     <span
+      data-tex={value}
       className={`ink-math ${display ? 'block text-center' : 'ink-math--tilt'}`}
       dangerouslySetInnerHTML={{ __html: html }}
     />
@@ -211,6 +212,7 @@ const StepCard = memo(function StepCard({
   return (
     <section
       data-selected={selected ? 'true' : 'false'}
+      data-step-index={step.index}
       onClick={() => onSelect?.(step)}
       className="step-card group cursor-pointer rounded-r-lg pl-4 pr-3"
     >

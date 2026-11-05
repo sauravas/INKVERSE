@@ -4,6 +4,7 @@ import AnswerSheet, { WrittenText } from './AnswerSheet'
 import InkCanvas from './InkCanvas'
 import NotesView from './NotesView'
 import { PenTools } from './PenTools'
+import CircleLayer, { CircleToggle } from './CircleLayer'
 import { SourcesNote, threadsFromRows, useStepQuestions } from './StepTools'
 
 const OUTCOMES = [
@@ -183,6 +184,9 @@ function Session({ module, sync, ai, pen, onExit, onNotes }) {
   const [finished, setFinished] = useState({})   // qid -> outcome, this session
   const [err, setErr] = useState(null)
   const [inkCount, setInkCount] = useState(0)
+  const [circling, setCircling] = useState(false)
+  const [missed, setMissed] = useState(false)
+  const answerRef = useRef(null)
   const abortRef = useRef(null)
   // latest streamed steps, read when a stream finishes (never inside updaters)
   const hintSteps = useRef([])
@@ -417,14 +421,26 @@ function Session({ module, sync, ai, pen, onExit, onNotes }) {
 
             {answer && (
               <div data-answer className="px-5 pb-[var(--rule)]">
-                <div className="lined-row">
+                <div className="lined-row flex items-baseline">
                   <span className="hand lined-text text-[1.6rem] text-emerald-800">Answer</span>
+                  {answer.steps.length > 0 && (
+                    <CircleToggle on={circling} missed={missed}
+                                  onChange={(v) => { setCircling(v); setMissed(false) }} />
+                  )}
                 </div>
                 <SourcesNote items={answer.sources} notices={answer.notices} />
-                <AnswerSheet steps={answer.steps} streaming={answer.streaming}
-                             instant={answer.instant} emptyHint="Working it out…"
-                             onAskStep={(s) => ask.setAsking(s)}
-                             afterStep={ask.afterStep} onAskBlock={ask.askBlock} />
+                <div ref={answerRef} className="relative">
+                  <CircleLayer active={circling} resetKey={q.id}
+                               onCircle={(poly) => {
+                                 const ok = ask.circled(answerRef.current, poly)
+                                 setMissed(!ok)
+                                 if (ok) setCircling(false)
+                               }} />
+                  <AnswerSheet steps={answer.steps} streaming={answer.streaming}
+                               instant={answer.instant} emptyHint="Working it out…"
+                               onAskStep={(s) => ask.setAsking(s)}
+                               afterStep={ask.afterStep} onAskBlock={ask.askBlock} />
+                </div>
               </div>
             )}
           </div>

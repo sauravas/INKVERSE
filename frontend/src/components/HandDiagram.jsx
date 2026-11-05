@@ -446,7 +446,7 @@ export default function HandDiagram({ diagram: d, animate = true, onNodeClick })
           const cy = n.y + CAPTION_H
           const box = { x: n.x - n.width / 2, y: cy - n.height / 2, w: n.width, h: n.height }
           return (
-            <g key={n.id}
+            <g key={n.id} data-block={n.label}
                onClick={onNodeClick ? () => onNodeClick(n.label) : undefined}
                onMouseEnter={() => setHover(n.id)} onMouseLeave={() => setHover(null)}
                style={{ cursor: onNodeClick ? 'pointer' : 'default' }}>

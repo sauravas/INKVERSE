@@ -103,14 +103,16 @@ export default function HandTable({ table: t, animate = true }) {
         <thead>
           <tr style={rowStyle(0)}>
             {t.header.map((h, j) => (
-              <th key={j}><RichText text={h} className="hand" /></th>
+              <th key={j} data-cell={h}><RichText text={h} className="hand" /></th>
             ))}
           </tr>
         </thead>
         <tbody>
           {t.rows.map((r, i) => (
             <tr key={i} style={rowStyle(i + 1)}>
-              {r.map((c, j) => <td key={j}><RichText text={c} className="hand" /></td>)}
+              {r.map((c, j) => (
+                <td key={j} data-cell={c}><RichText text={c} className="hand" /></td>
+              ))}
             </tr>
           ))}
         </tbody>

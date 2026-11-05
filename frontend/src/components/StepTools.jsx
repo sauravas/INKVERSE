@@ -5,6 +5,7 @@ import MicButton from './MicButton'
 import MiniPad from './MiniPad'
 import { canSpeak, speak, speakableStep } from '../lib/speak'
 import { streamSteps } from '../lib/api'
+import { resolveCircle } from '../lib/circle'
 
 /**
  * Follow-up questions about one step, kept as a thread in the margin.
@@ -17,6 +18,8 @@ export function useStepQuestions({ question, steps, questionId, provider, consen
   const padRef = useRef(null)
   const [asking, setAsking] = useState(null)
   const [askText, setAskText] = useState('')
+  // what the student circled in the step being asked about, if anything
+  const [focus, setFocus] = useState('')
   // step index -> [{ id, ask, steps, streaming, error, instant }]
   const [explanations, setExplanationsState] = useState({})
   // the latest threads, readable synchronously when composing a follow-up
@@ -36,7 +39,7 @@ export function useStepQuestions({ question, steps, questionId, provider, consen
   }))
 
   /** Ask about `step`. Appends a turn and streams its answer into it. */
-  const send = useCallback((step, text, png = null, { voice = false } = {}) => {
+  const send = useCallback((step, text, png = null, { voice = false, label, focus: about = '' } = {}) => {
     const ask = (text || '').trim()
     if (!step || (!ask && !png)) return
     const id = ++nextId.current
@@ -44,16 +47,18 @@ export function useStepQuestions({ question, steps, questionId, provider, consen
       .filter((t) => !t.error && t.steps?.length)
       .map((t) => ({ ask: t.ask, answer: stepsToText(t.steps) }))
     setExplanations((p) => ({ ...p, [step.index]: [...(p[step.index] || []),
-      { id, ask: ask || '(handwritten)', steps: [], streaming: true }] }))
+      { id, ask: label || ask || '(handwritten)', about, steps: [], streaming: true }] }))
     const n = id
     let built = []
     streamSteps('/api/ai/explain', {
       question, answer: stepsToText(steps),
       step: stepToText(step), step_index: step.index,
-      ask, ask_image: png, question_id: questionId, history,
+      ask, ask_image: png, question_id: questionId, history, focus: about,
       provider, consent_cloud: !!consent,
     }, {
-      onEvent: (ev) => { if (ev.type === 'ask') patchTurn(step.index, n, { ask: ev.value }) },
+      onEvent: (ev) => {
+        if (ev.type === 'ask' && !label) patchTurn(step.index, n, { ask: ev.value })
+      },
       onSteps: (st) => { built = st; patchTurn(step.index, n, { steps: st }) },
       onNotice: (note) => patchTurn(step.index, n, { notice: note }),
       onDone: () => {
@@ -68,11 +73,24 @@ export function useStepQuestions({ question, steps, questionId, provider, consen
   const submitAsk = useCallback(() => {
     if (!asking) return
     const png = padRef.current?.isEmpty() ? null : padRef.current?.toPng()
-    send(asking, askText, png)
-    setAsking(null); setAskText(''); padRef.current?.clear()
-  }, [asking, askText, send])
+    send(asking, askText, png, { focus })
+    setAsking(null); setAskText(''); setFocus(''); padRef.current?.clear()
+  }, [asking, askText, focus, send])
 
-  const cancel = () => { setAsking(null); setAskText(''); padRef.current?.clear() }
+  const cancel = () => { setAsking(null); setAskText(''); setFocus(''); padRef.current?.clear() }
+
+  /**
+   * A loop was drawn over the answer inside `root`. Work out what it enclosed
+   * and open the ask box at that step. Returns false if it circled nothing.
+   */
+  const circled = useCallback((root, poly) => {
+    const hit = root && resolveCircle(root, poly)
+    const step = hit && steps.find((x) => x.index === hit.stepIndex)
+    if (!step) return false
+    setAsking(step)
+    setFocus(hit.focus)
+    return true
+  }, [steps])
 
   /** Tapping a block in a diagram asks about that block straight away. */
   const askBlock = useCallback((step, label) => {
@@ -84,17 +102,41 @@ export function useStepQuestions({ question, steps, questionId, provider, consen
     <>
       {explanations[s.index]?.length > 0 && (
         <MarginNote index={s.index} turns={explanations[s.index]}
-                    onFollowUp={(text, voice) => send(s, text, null, { voice })} />
+                    onFollowUp={(text, voice, label) => send(s, text, null, { voice, label })} />
       )}
       {asking?.index === s.index && (
         <AskInline step={s} padRef={padRef} text={askText} setText={setAskText}
                    onSubmit={submitAsk} onCancel={cancel}
-                   onSpoken={(text) => { send(s, text, null, { voice: true }); cancel() }} />
+                   focus={focus}
+                   onSpoken={(text) => { send(s, text, null, { voice: true, focus }); cancel() }}
+                   onQuick={(prompt, label) => { send(s, prompt, null, { label, focus }); cancel() }} />
       )}
     </>
   )
 
-  return { asking, setAsking, explanations, setExplanations, afterStep, askBlock, send }
+  return { asking, setAsking, explanations, setExplanations, afterStep, askBlock, send, circled }
+}
+
+// one-tap follow-ups: the doubts students actually have about a step
+export const QUICK_ASKS = [
+  ['Simpler, please', 'Explain this step more simply, as if to a beginner, with one small example.'],
+  ['Another method', 'Show a different way to do this step, and say when it is the better choice.'],
+  ['Why this formula?', 'Why is this formula or rule used here? State it, and show why it applies.'],
+  ['Common mistakes', 'What mistakes do students commonly make in this step, and how do I avoid them?'],
+]
+
+function QuickAsks({ onAsk, small }) {
+  return (
+    <div className="lined-row flex flex-wrap items-center gap-1.5">
+      {QUICK_ASKS.map(([label, prompt]) => (
+        <button key={label} type="button" onClick={() => onAsk(prompt, label)}
+                className={`rounded-full bg-white px-2 leading-6 text-amber-900 ring-1
+                            ring-amber-300 hover:bg-amber-100 ${small ? 'text-[11px]' : 'text-xs'}`}>
+          {label}
+        </button>
+      ))}
+    </div>
+  )
 }
 
 /** Build thread state from stored explanation rows. */
@@ -120,6 +162,9 @@ export function MarginNote({ index, turns, ex, onFollowUp }) {
       </div>
       {list.map((t, i) => (
         <div key={i}>
+          {t.about && (
+            <p className="lined-row truncate text-[11px] text-orange-800">circled: {t.about}</p>
+          )}
           <RichText text={t.ask} className="hand lined-row block text-[1.2rem] text-amber-950" />
           {t.notice && <p className="lined-row text-[11px] text-ink-soft">{t.notice}</p>}
           {t.error
@@ -128,6 +173,9 @@ export function MarginNote({ index, turns, ex, onFollowUp }) {
                            instant={t.instant} dense emptyHint="Thinking…" />}
         </div>
       ))}
+      {onFollowUp && !busy && (
+        <QuickAsks small onAsk={(prompt, label) => onFollowUp(prompt, false, label)} />
+      )}
       {onFollowUp && !busy && (
         <LinedInput value={text} onChange={setText} size="small"
                     placeholder="ask a follow-up — type or tap the mic"
@@ -143,9 +191,11 @@ export function MarginNote({ index, turns, ex, onFollowUp }) {
   )
 }
 
-export function AskInline({ step, padRef, text, setText, onSubmit, onCancel, onSpoken }) {
+export function AskInline({ step, padRef, text, setText, onSubmit, onCancel, onSpoken, onQuick,
+                           focus }) {
   return (
-    <div className="ml-6 rounded-lg border border-amber-300 bg-amber-50/70 px-4">
+    // a ring, not a border: a border's 2px would push everything below off the rules
+    <div className="ml-6 rounded-lg bg-amber-50/70 px-4 ring-1 ring-amber-300">
       <div className="lined-row flex items-center gap-2">
         <span className="text-xs font-medium">
           Ask about {step.final ? 'the final answer' : `step ${step.index}`}
@@ -153,6 +203,12 @@ export function AskInline({ step, padRef, text, setText, onSubmit, onCancel, onS
         <button onClick={onCancel}
                 className="ml-auto text-xs text-ink-soft hover:underline">cancel</button>
       </div>
+      {focus && (
+        <p className="lined-row truncate text-xs text-orange-800">
+          You circled <RichText text={focus} className="hand text-[1.1rem]" />
+        </p>
+      )}
+      {onQuick && <QuickAsks onAsk={onQuick} />}
       <MiniPad ref={padRef} height={96}
                placeholder="write your question here — or type it below" />
       <LinedInput value={text} onChange={setText} onSubmit={onSubmit}

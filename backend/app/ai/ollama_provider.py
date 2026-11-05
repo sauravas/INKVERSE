@@ -422,12 +422,13 @@ class OllamaProvider:
 
     def explain(self, question: str, answer: str, step: str,
                 ask: str, context: str = "",
-                history: list | None = None) -> AsyncIterator[str]:
+                history: list | None = None, focus: str = "") -> AsyncIterator[str]:
         return self._text(
             [{"role": "system", "content": prompts.EXPLAIN_SYSTEM},
              {"role": "user", "content": prompts.EXPLAIN_USER.format(
                  question=question, answer=answer[:6000], step=step, ask=ask,
                  history_block=prompts.history_block(history or []),
+                 focus_block=prompts.focus_block(focus),
                  context_block=prompts.context_block(context))}],
             num_predict=900, temp=0.3, think=False)
 
