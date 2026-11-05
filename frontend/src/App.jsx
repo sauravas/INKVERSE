@@ -306,7 +306,8 @@ export default function App() {
       {view === 'notes' && <NotesStudy ai={ai} />}
 
       {view === 'import' && (
-        <ImportView onPractise={() => setView('practice')} />
+        <ImportView onPractise={() => setView('practice')}
+                    onNotes={() => setView('notes')} />
       )}
 
       {view === 'practice' && (

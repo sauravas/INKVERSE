@@ -76,6 +76,17 @@ class Hub:
             await self.broadcast(rid, {"t": "peers", "peers": r.peers()})
         # the room and its strokes stay alive so a client can reconnect
 
+    async def announce(self, msg: dict):
+        """Tell every connected client something that is not about one room.
+
+        The library - subjects, modules, questions, notes - is shared by the
+        whole app, not by a workspace, so an import has to reach the dashboard
+        on another tab and the question bank on the phone, not just whoever
+        happened to be in the room it was committed from.
+        """
+        for rid in list(self.rooms):
+            await self.broadcast(rid, msg)
+
     async def broadcast(self, rid: str, msg: dict, skip: str | None = None):
         r = self.rooms.get(rid)
         if not r:

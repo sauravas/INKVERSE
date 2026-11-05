@@ -4,6 +4,7 @@
 // runs, and a dead backend only disables sync, never local writing.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { bumpLibrary } from './library'
 
 function wsUrl(room, role) {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -72,6 +73,8 @@ export function useWorkspace(room, role = 'laptop') {
           return
         }
         if (m.t === 'welcome' || m.t === 'peers') setPeers(m.peers || [])
+        // someone - another tab, the phone - changed the shared library
+        if (m.t === 'library') bumpLibrary(m.reason || 'remote')
         for (const fn of handlers.current) fn(m)
       }
 

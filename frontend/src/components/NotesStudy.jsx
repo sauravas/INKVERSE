@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import { api, streamSteps } from '../lib/api'
 import { isLoop, resolveCircle } from '../lib/circle'
 import { canHighlight, findQuote, paint } from '../lib/highlight'
+import { useLibraryVersion } from '../lib/library'
 import { canSpeak, speak, speakableStep } from '../lib/speak'
 import AnswerSheet, { stepToText, stepsToText } from './AnswerSheet'
 import LinedInput from './LinedInput'
@@ -30,14 +31,18 @@ export default function NotesStudy({ ai }) {
       setModuleId((cur) => cur || m[0]?.modules[0]?.id || null)
     }).catch((e) => setErr(e.message))
   }, [])
-  useEffect(() => { loadModules() }, [loadModules])
+  // newly imported material becomes a module with passages to write notes
+  // from, so the list has to follow the library rather than the mount
+  const libraryVersion = useLibraryVersion()
+  useEffect(() => { loadModules() }, [loadModules, libraryVersion])
 
   const load = useCallback((mid) => {
     if (!mid) return
     setData(null)
     api.studyNotes(mid).then(setData).catch((e) => setErr(e.message))
   }, [])
-  useEffect(() => { setWriting(null); load(moduleId) }, [moduleId, load])
+  useEffect(() => { setWriting(null); load(moduleId) },
+            [moduleId, load, libraryVersion])
 
   const prepare = () => {
     if (data?.note && !window.confirm('Write these notes again? Your highlights, ink and '

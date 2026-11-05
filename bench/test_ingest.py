@@ -43,6 +43,23 @@ Paging, segmentation, virtual memory, demand paging, page replacement.
 """
 
 
+# A real question bank a student imported: a module heading, then one question
+# per line with no numbering at all. The first version of the parser recognised
+# only "1." and "Q1.", so this produced a module named after its own first
+# question and no questions whatsoever.
+UNNUMBERED = """DSP QUESTION BANK
+MODULE-1
+Discuss the process of frequency domain sampling and reconstruction of discrete time signals.
+Show that DFT as a linear Transformation.
+Compute 4 point DFT using formula method for the sequence x(n) = {1, 2,3, 4}. Plot magnitude and phase spectrum.
+Compute 6  point DFT using formula method for the sequence
+ x(n) =
+Compute N point DFT of x(n) = an u(n) for 0 <= n <= N-1.
+Derive the relationship of DFT with Z transforms.
+State and prove Linearity and Periodicity property of DFT.
+"""
+
+
 def check(name, cond, detail=""):
     print(f"{'PASS' if cond else 'FAIL'}  {name}{('  ' + detail) if detail else ''}")
     return cond
@@ -77,6 +94,26 @@ def main():
     ok &= check("page header noise not turned into a question",
                 not any("Page 1" in t for m in mods for t in
                         [q["text"] for q in m["questions"]]))
+
+    r = ingest.parse(UNNUMBERED, default_module="BEC24502_DSP Module-1 QB")
+    mods = r["modules"]
+    print(f"\nunnumbered bank -> kind={r['kind']}, "
+          f"modules={[m['name'] for m in mods]}")
+    qs = [q["text"] for m in mods for q in m["questions"]]
+    for q in qs:
+        print(f"     - {q[:78]!r}")
+    ok &= check("detected as a question bank", r["kind"] == "questions", r["kind"])
+    ok &= check("one module, named after the heading alone",
+                [m["name"] for m in mods] == ["Module 1"],
+                str([m["name"] for m in mods]))
+    ok &= check("every unnumbered question found", len(qs) == 7, str(len(qs)))
+    ok &= check("the module is not named after its first question",
+                not any("Discuss" in m["name"] for m in mods))
+    ok &= check("a wrapped question stays one question",
+                any(q.startswith("Compute 6") and "x(n)" in q for q in qs),
+                str([q for q in qs if q.startswith("Compute 6")]))
+    ok &= check("nothing was left in the notes pile",
+                all(not m["notes"] for m in mods))
 
     s = ingest.parse(SYLLABUS)
     print(f"\nsyllabus -> kind={s['kind']}, modules={[m['name'] for m in s['modules']]}")

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, streamSteps } from '../lib/api'
 import AnswerSheet, { WrittenText } from './AnswerSheet'
 import InkCanvas from './InkCanvas'
+import { useLibraryVersion } from '../lib/library'
 import NotesView from './NotesView'
 import { PenTools } from './PenTools'
 import CircleLayer, { CircleToggle } from './CircleLayer'
@@ -32,7 +33,9 @@ export default function PracticeView({ sync, ai, onImport, ...pen }) {
       .then(([s, d]) => { setSubjects(s); setReport(d) })
       .catch(() => setSubjects([]))
   }, [])
-  useEffect(() => { if (mode === 'pick') load() }, [mode, load])
+  // an imported question bank should be here to practise immediately
+  const libraryVersion = useLibraryVersion()
+  useEffect(() => { if (mode === 'pick') load() }, [mode, load, libraryVersion])
 
   if (mode === 'session' && module) {
     return <Session module={module} sync={sync} ai={ai} pen={pen}

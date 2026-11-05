@@ -79,6 +79,7 @@ export const api = {
   importCommit: (b) => post('/api/import/commit', b),
   sources: (sid) => get(`/api/import/sources${sid ? `?subject_id=${sid}` : ''}`),
   deleteSource: (id) => del(`/api/import/sources/${id}`),
+  reparseSource: (id) => post(`/api/import/sources/${id}/reparse`, {}),
 
   // --- question-bank practice ----------------------------------------------
   practiceModule: (mid) => get(`/api/practice/module/${mid}`),

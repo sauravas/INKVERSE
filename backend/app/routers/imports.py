@@ -10,7 +10,8 @@ import asyncio
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from .. import db, ingest, retrieval
+from .. import db, ingest, obs, retrieval
+from ..ws import hub
 
 router = APIRouter(prefix="/api/import", tags=["import"])
 
@@ -151,8 +152,96 @@ async def commit(body: CommitIn):
         if reindex and material.strip():
             chunks += retrieval.index(src, sid, mid, draft.name, material)
 
+    obs.emit("library.changed",
+             f"Imported {body.filename or 'a document'}: {created_questions} "
+             f"question(s) into {created_modules or len(body.modules)} module(s)",
+             step="commit", questions=created_questions,
+             modules=created_modules, chunks=chunks)
+    # every open screen refreshes; the student does not have to go and look
+    await hub.announce({"t": "library", "reason": "import",
+                        "subject_id": sid,
+                        "questions": created_questions,
+                        "modules": created_modules})
     return {"subject_id": sid, "source_id": src, "modules_created": created_modules,
             "questions_created": created_questions, "chunks_indexed": chunks}
+
+
+@router.post("/sources/{source_id}/reparse")
+async def reparse(source_id: str):
+    """Read a document that is already imported again, with today's parser.
+
+    The text is kept when a document is imported, so a parser that has since
+    learned a format can be run over it without asking the student to find the
+    file and upload it a second time. Everything is de-duplicated by text, so a
+    re-read adds what was missed and changes nothing that was already there.
+    """
+    src = db.one("SELECT * FROM sources WHERE id=?", (source_id,))
+    if not src:
+        raise HTTPException(404, "No such import")
+    if not (src["text"] or "").strip():
+        raise HTTPException(422, "That import has no stored text to re-read.")
+
+    parsed = await asyncio.to_thread(
+        ingest.parse, src["text"], src["kind"] or "auto",
+        (src["filename"] or "Imported").rsplit(".", 1)[0][:60] or "Imported")
+
+    sid = src["subject_id"]
+    created_modules = created_questions = 0
+    position = db.one("SELECT COALESCE(MAX(position), -1) p FROM modules "
+                      "WHERE subject_id=?", (sid,))["p"]
+    for draft in parsed["modules"]:
+        name = (draft["name"] or "").strip()[:120] or "Module"
+        same = db.one("SELECT id FROM modules WHERE subject_id=? AND "
+                      "lower(name)=lower(?)", (sid, name))
+        if same:
+            mid = same["id"]
+        else:
+            position += 1
+            mid = db.nid()
+            db.run("INSERT INTO modules (id,subject_id,name,position,created_at) "
+                   "VALUES (?,?,?,?,?)", (mid, sid, name, position, db.now()))
+            created_modules += 1
+
+        start = db.one("SELECT COALESCE(MAX(position), -1) p FROM questions "
+                       "WHERE module_id=?", (mid,))["p"]
+        have = {r["t"] for r in db.rows(
+            "SELECT lower(trim(text)) t FROM questions WHERE module_id=?", (mid,))}
+        for q in draft["questions"]:
+            text = (q.get("text") or "").strip()
+            if not text or text.lower() in have:
+                continue
+            have.add(text.lower())
+            start += 1
+            t = db.now()
+            db.run("INSERT INTO questions (id,module_id,subject_id,text,important,"
+                   "status,source_id,position,marks,created_at,updated_at) "
+                   "VALUES (?,?,?,?,0,'pending',?,?,?,?,?)",
+                   (db.nid(), mid, sid, text, source_id, start, q.get("marks"),
+                    t, t))
+            created_questions += 1
+
+    # A module whose only name came from a question the old parser mistook for a
+    # heading is now empty and misleading; drop it, but only if nothing is
+    # attached to it.
+    removed = 0
+    for m in db.rows("SELECT id, name FROM modules WHERE subject_id=?", (sid,)):
+        used = db.one("SELECT COUNT(*) n FROM questions WHERE module_id=?",
+                      (m["id"],))["n"]
+        indexed = db.one("SELECT COUNT(*) n FROM chunks WHERE module_id=?",
+                         (m["id"],))["n"]
+        noted = db.one("SELECT COUNT(*) n FROM study_notes WHERE module_id=?",
+                       (m["id"],))["n"]
+        if not (used or indexed or noted):
+            db.run("DELETE FROM modules WHERE id=?", (m["id"],))
+            removed += 1
+
+    obs.emit("library.changed",
+             f"Re-read {src['filename'] or 'an import'}: "
+             f"{created_questions} question(s) recovered",
+             step="commit", questions=created_questions)
+    await hub.announce({"t": "library", "reason": "reparse", "subject_id": sid})
+    return {"subject_id": sid, "questions_created": created_questions,
+            "modules_created": created_modules, "modules_removed": removed}
 
 
 @router.get("/sources")
@@ -177,6 +266,7 @@ async def delete_source(source_id: str, with_questions: bool = False):
     else:
         db.run("UPDATE questions SET source_id=NULL WHERE source_id=?", (source_id,))
     db.run("DELETE FROM sources WHERE id=?", (source_id,))
+    await hub.announce({"t": "library", "reason": "import-removed"})
     return {"ok": True}
 
 

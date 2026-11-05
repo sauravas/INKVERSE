@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../lib/api'
+import { useLibraryVersion } from '../lib/library'
 
 /**
  * Study dashboard.
@@ -48,7 +49,10 @@ export default function Dashboard({ onOpenQuestion }) {
     }
   }, [])
 
-  useEffect(() => { reload() }, [reload])
+  // re-reads whenever anything writes to the library - an import here, a
+  // question filed on the phone - so the dashboard is never a stale snapshot
+  const libraryVersion = useLibraryVersion()
+  useEffect(() => { reload() }, [reload, libraryVersion])
 
   const addSubject = async () => {
     const name = prompt('Subject name (e.g. Engineering Mathematics III)')

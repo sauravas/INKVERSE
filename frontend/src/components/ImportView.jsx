@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
+import { bumpLibrary, useLibraryVersion } from '../lib/library'
 
 const ACCEPT = '.pdf,.docx,.txt,.md,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff'
 const KINDS = [
@@ -13,7 +14,7 @@ const METHOD_LABEL = { text: 'text layer', ocr: 'OCR (Tesseract)', mixed: 'text 
  * Nothing is written until the student has seen and corrected the proposal -
  * OCR and heuristic parsing are useful, not trustworthy.
  */
-export default function ImportView({ onPractise }) {
+export default function ImportView({ onPractise, onNotes }) {
   const [ocr, setOcr] = useState(null)
   const [kind, setKind] = useState('auto')
   const [phase, setPhase] = useState('idle')      // idle|reading|preview|saving|done
@@ -27,10 +28,44 @@ export default function ImportView({ onPractise }) {
   const [dragging, setDragging] = useState(false)
   const fileRef = useRef(null)
 
+  const [sources, setSources] = useState([])
+  const [busy, setBusy] = useState(null)
+
+  const libraryVersion = useLibraryVersion()
+  const loadSources = useCallback(() => {
+    api.sources().then(setSources).catch(() => setSources([]))
+  }, [])
+
   useEffect(() => {
     api.importStatus().then((s) => setOcr(s.ocr)).catch(() => setOcr(null))
     api.subjects().then(setSubjects).catch(() => {})
-  }, [])
+    loadSources()
+  }, [loadSources, libraryVersion])
+
+  // Read a document that is already imported again. Worth offering because the
+  // parser improves: a question bank that produced nothing under an older one
+  // should not have to be found and uploaded a second time.
+  const reread = async (src) => {
+    setBusy(src.id); setErr(null)
+    try {
+      const r = await api.reparseSource(src.id)
+      bumpLibrary('reparse')
+      setErr(r.questions_created
+        ? null
+        : 'Re-read it, but found no questions this time either.')
+    } catch (e) {
+      setErr(e.message)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const forget = async (src) => {
+    setBusy(src.id)
+    try { await api.deleteSource(src.id); bumpLibrary('import-removed') }
+    catch (e) { setErr(e.message) }
+    finally { setBusy(null) }
+  }
 
   const read = async (file) => {
     if (!file) return
@@ -68,6 +103,10 @@ export default function ImportView({ onPractise }) {
           questions: m.questions.filter((q) => q.text.trim()),
         })),
       })
+      // the dashboard, the question bank and the notes list are all showing
+      // the library; tell them it just changed rather than making the student
+      // navigate away and back to see what they imported
+      bumpLibrary('import')
       setResult(r); setPhase('done')
     } catch (e) {
       setErr(e.message); setPhase('preview')
@@ -134,6 +173,49 @@ export default function ImportView({ onPractise }) {
               </>
             )}
           </div>
+        )}
+
+        {(phase === 'idle' || phase === 'done') && sources.length > 0 && (
+          <section className="mt-6">
+            <h2 className="mb-2 text-sm font-semibold text-ink">
+              What you have imported
+            </h2>
+            <ul className="divide-y divide-black/10 overflow-hidden rounded-xl
+                           border border-black/10 bg-[#fbf9f3]">
+              {sources.map((src) => (
+                <li key={src.id} className="flex flex-wrap items-center gap-x-3 gap-y-1
+                                            px-4 py-2.5 text-sm">
+                  <span className="min-w-0 flex-1 truncate font-medium text-ink"
+                        title={src.filename}>
+                    {src.filename || 'Untitled document'}
+                  </span>
+                  <span className={`shrink-0 text-xs ${src.questions
+                    ? 'text-ink-soft' : 'text-amber-700'}`}>
+                    {src.questions
+                      ? `${src.questions} question${src.questions === 1 ? '' : 's'}`
+                      : 'no questions found'}
+                    {' · '}{METHOD_LABEL[src.method] || src.method}
+                    {src.pages > 1 ? ` · ${src.pages} pages` : ''}
+                  </span>
+                  <button onClick={() => reread(src)} disabled={busy === src.id}
+                          className="shrink-0 rounded-md border border-black/15 px-2 py-1
+                                     text-xs hover:bg-white disabled:opacity-40">
+                    {busy === src.id ? 'Reading…' : 'Re-read'}
+                  </button>
+                  <button onClick={() => forget(src)} disabled={busy === src.id}
+                          className="shrink-0 text-xs text-ink-soft hover:text-red-700
+                                     disabled:opacity-40">
+                    remove
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2 text-xs text-ink-soft">
+              Re-read runs the current parser over the text already stored for a
+              document - useful when an import came in with fewer questions than
+              it should have. Removing one leaves its questions in place.
+            </p>
+          </section>
         )}
 
         {(phase === 'preview' || phase === 'saving') && preview && (
@@ -286,10 +368,17 @@ export default function ImportView({ onPractise }) {
               {result.questions_created === 0 && result.chunks_indexed === 0
                 && ' This document was already imported, so nothing was duplicated.'}
             </p>
+            <p className="mt-1 text-sm text-emerald-900/80">
+              Already on your dashboard and in the question bank.
+            </p>
             <div className="mt-3 flex gap-2">
               <button onClick={onPractise}
                       className="rounded-lg bg-ink px-3 py-2 text-sm text-white">
                 Go to the question bank
+              </button>
+              <button onClick={onNotes}
+                      className="rounded-lg border border-black/15 px-3 py-2 text-sm">
+                Write notes from it
               </button>
               <button onClick={reset}
                       className="rounded-lg border border-black/15 px-3 py-2 text-sm">

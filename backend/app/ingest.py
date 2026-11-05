@@ -216,6 +216,35 @@ def guess_kind(text: str) -> str:
     return "syllabus" if modules else "notes"
 
 
+def _unnumbered(lines: list[str]) -> bool:
+    """Does this paper write its questions without numbering them?
+
+    Plenty do - a module heading and then one question per line:
+
+        MODULE-1
+        Discuss the process of frequency domain sampling.
+        Show that DFT is a linear transformation.
+
+    Recognising only "1." and "Q1." dropped every question in a paper like
+    that: each line fell through to the notes pile and the module came out
+    with none. But an unnumbered line is also how a numbered question
+    continues onto the next line, so the two readings cannot both be on at
+    once. Numbering wins when the paper actually uses it.
+    """
+    numbered = sum(1 for l in lines if l and TOP_Q_RE.match(l))
+    questiony = sum(1 for l in lines
+                    if l and QUESTION_HINT_RE.search(l)
+                    and not INSTRUCTION_RE.search(l))
+    if questiony < 3:
+        return False
+    return numbered < max(2, questiony * 0.2)
+
+
+def _starts_question(line: str) -> bool:
+    """An unnumbered line that reads like the start of a question."""
+    return bool(QUESTION_HINT_RE.search(line)) and not INSTRUCTION_RE.search(line)
+
+
 def parse(text: str, kind: str = "auto", default_module: str = "Imported") -> dict:
     """Split extracted text into modules, questions and reference notes.
 
@@ -226,6 +255,7 @@ def parse(text: str, kind: str = "auto", default_module: str = "Imported") -> di
     if kind == "auto":
         kind = guess_kind(text)
     lines = _clean_lines(text)
+    loose = kind == "questions" and _unnumbered(lines)
 
     modules: list[dict] = []
     cur = {"name": default_module, "questions": [], "notes": []}
@@ -255,7 +285,12 @@ def parse(text: str, kind: str = "auto", default_module: str = "Imported") -> di
             if not title:
                 # "Module 3" on its own line: the title is usually the next line
                 nxt = next((l for l in lines[i + 1:i + 3] if l), "")
-                if nxt and not TOP_Q_RE.match(nxt) and not SUB_Q_RE.match(nxt):
+                # "MODULE-1" followed by the first question is still just
+                # Module 1 - naming the module after a question it contains
+                # is how "Module 1: Discuss the process of frequency..." got
+                # into the library
+                if (nxt and not TOP_Q_RE.match(nxt) and not SUB_Q_RE.match(nxt)
+                        and not _starts_question(nxt)):
                     title = nxt
             label = f"{m.group(1).title()} {m.group(2).upper()}"
             name = f"{label}: {title}" if title else label
@@ -289,6 +324,13 @@ def parse(text: str, kind: str = "auto", default_module: str = "Imported") -> di
                     context = stem["text"].rstrip(":") + "\n"
             q = {"text": f"{context}({sub.group(1).lower()}) {body}".strip(),
                  "marks": marks}
+            cur["questions"].append(q)
+            continue
+        if loose and _starts_question(line):
+            # an unnumbered paper: this line opens a question of its own
+            close_stem()
+            body, marks = _split_marks(line)
+            q = {"text": body, "marks": marks}
             cur["questions"].append(q)
             continue
         if q is not None:
