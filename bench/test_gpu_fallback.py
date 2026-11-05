@@ -94,7 +94,10 @@ def _line(content=None, error=None, done=False):
     return json.dumps({"message": {"content": content or ""}, "done": done})
 
 
-def provider(client):
+def provider(client, cpu_first=False):
+    # the shipped default keeps the reader on the CPU; these cases are about
+    # what happens when a model is on the GPU and the driver drops it
+    op.config.VISION_CPU = cpu_first
     p = op.OllamaProvider("gemma3:4b", "qwen2.5:14b")
     http.session = lambda *a, **kw: client          # every call shares it
     p._loaded = lambda: _done(set())
@@ -172,10 +175,9 @@ async def main():
         check("keeps the real driver error", "device lost" in str(e), str(e))
 
     print("INKWISE_VISION_CPU=1 skips the first failure altogether")
-    op.config.VISION_CPU = True
     try:
         c = FakeClient(VULKAN)
-        p = provider(c)
+        p = provider(c, cpu_first=True)
         text, _ = await collect(
             p._stream_chat("gemma3:4b", [{"role": "user", "content": "q"}]))
         check("worked first time", text == "x = 2")

@@ -64,7 +64,15 @@ AUTOSTART_OLLAMA = os.getenv("INKWISE_AUTOSTART_OLLAMA", "1") == "1"
 # Intel Arc iGPU here) lose the device while encoding a page image, which kills
 # the model runner; INKWISE detects that and moves the model across on its own,
 # so this is only needed to skip the first failure.
-VISION_CPU = os.getenv("INKWISE_VISION_CPU", "0") == "1"
+# Keeping one stage resident at a time means the reader and the answerer evict
+# each other on every question, and a reload costs about 20 seconds - far more
+# than the reading itself, which takes about three. Putting the small reader on
+# the CPU removes the competition entirely: both stay resident, reading drops
+# from ~22s to ~3s, and the graphics driver stops being asked to encode images,
+# which is what it was crashing on. So it defaults on exactly when the swap
+# would otherwise happen. Set INKWISE_VISION_CPU=0 to read on the GPU anyway.
+VISION_CPU = os.getenv("INKWISE_VISION_CPU",
+                       "1" if EXCLUSIVE_MODELS else "0") == "1"
 
 # Leave the GPU to the screen. On a laptop with integrated graphics the model
 # and the display are the same chip, and a model that fills it can make the
@@ -75,12 +83,17 @@ CPU_ONLY = os.getenv("INKWISE_CPU_ONLY", "0") == "1"
 
 # Longest side of the page image sent to the vision model. Smaller images mean
 # smaller encoder allocations, which is what the driver above chokes on.
-VISION_MAX_SIDE = int(os.getenv("INKWISE_VISION_MAX_SIDE", "1100"))
+VISION_MAX_SIDE = int(os.getenv("INKWISE_VISION_MAX_SIDE", "900"))
 
 # Read numeric questions twice and flag disagreement. Costs a second vision
 # pass (a few seconds) and catches misread coefficients, which are otherwise
 # invisible and invalidate the whole solution.
 VERIFY_MATH = os.getenv("INKWISE_VERIFY_MATH", "1") == "1"
+# ...but only when the first reading is not already confident. Reading the page
+# twice doubles the slowest stage, and a second opinion on a transcription the
+# model is sure of almost never changes it. Below this, ask again; at or above
+# it, take the reading. Set to 1.0 to go back to always reading twice.
+VERIFY_BELOW = float(os.getenv("INKWISE_VERIFY_BELOW", "0.85"))
 
 # Gemini is opt-in and never receives notebook content without explicit consent.
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")

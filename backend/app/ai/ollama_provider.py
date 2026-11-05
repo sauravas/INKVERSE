@@ -447,7 +447,7 @@ class OllamaProvider:
             self.vision_model,
             [{"role": "system", "content": prompts.EXTRACT_SYSTEM},
              {"role": "user", "content": user, "images": [image_b64]}],
-            num_predict=600, temp=temp,
+            num_predict=320, temp=temp,
         )
         return prompts.parse_extraction(raw)
 
@@ -465,8 +465,13 @@ class OllamaProvider:
         data = await self._read_once(image_b64, user, temp=0.1)
 
         do_verify = (config.VERIFY_MATH if verify is None else verify)
-        if do_verify and prompts.looks_mathematical(data.get("question", "")):
+        if (do_verify
+                and prompts.looks_mathematical(data.get("question", ""))
+                and data.get("confidence", 0.0) < config.VERIFY_BELOW):
             data = prompts.merge_readings(data, await self.reread(image_b64))
+        elif do_verify:
+            obs.emit("step", "First reading was confident - not read twice",
+                     step="verifier", skipped=True)
 
         data.update({
             "latency_s": round(time.perf_counter() - t0, 2),

@@ -33,6 +33,7 @@ class FakeProvider:
     text_model = "fake-text"
 
     def __init__(self):
+        self.confidence = 0.4      # unsure, so the Verifier is asked
         self.first = "Solve $x^2 - 5x + 6 = 0$"
         self.second = self.first
         self.fail_solve = False
@@ -43,7 +44,8 @@ class FakeProvider:
 
     async def extract(self, image_b64, hint="", verify=None):
         obs.emit("model.call", "fake-vision warm", model="fake-vision")
-        return {"question": self.first, "confidence": 0.9, "subject_guess": "Maths"}
+        return {"question": self.first, "confidence": self.confidence,
+                "subject_guess": "Maths"}
 
     async def reread(self, image_b64):
         return {"question": self.second, "confidence": 0.8}
@@ -137,6 +139,17 @@ check("alternative offered", r.get("alternative") == fake.second)
 check("confidence capped", r["confidence"] <= 0.45, r["confidence"])
 check("warn event emitted", any(e["level"] == "warn" for e in run_events(r["trace"])))
 fake.second = fake.first
+
+print("read: a confident reading is not read twice")
+fake.confidence = 0.95
+r = c.post("/api/ai/extract", json={"image": page_png(), "provider": "local"}).json()
+check("only the Reader ran",
+      agents_started(run_events(r["trace"])) == ["reader"],
+      agents_started(run_events(r["trace"])))
+check("and it says why it stopped there",
+      any(e["kind"] == "step" and e["data"].get("step") == "verifier"
+          and e["data"].get("skipped") for e in run_events(r["trace"])))
+fake.confidence = 0.4
 
 print("read: no digits -> no Verifier")
 fake.first = "Explain photosynthesis"

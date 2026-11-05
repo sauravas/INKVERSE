@@ -235,15 +235,25 @@ async def verifier(provider, image_b64: str, first: dict) -> dict:
 
 
 async def read_page(provider, image_b64: str, hint: str = "") -> dict:
-    """Reader, then Verifier when a misread digit could change the answer."""
+    """Reader, then Verifier when a misread digit could change the answer.
+
+    Reading the page is the slowest thing the app does, and reading it twice
+    doubles that. A second opinion is worth it on a reading the model is
+    unsure of; on one it is confident about it almost never changes the
+    answer, so that case takes the first reading and says so.
+    """
     out = await reader(provider, image_b64, hint)
-    if config.VERIFY_MATH and prompts.looks_mathematical(out.get("question", "")):
-        obs.emit("route", "Digits found - delegating to Verifier",
-                 agent="reader", to="verifier")
-        out = await verifier(provider, image_b64, out)
-    else:
+    confidence = out.get("confidence", 0.0)
+    if not (config.VERIFY_MATH and prompts.looks_mathematical(out.get("question", ""))):
         obs.emit("step", "No digits - verification not needed",
                  agent="orchestrator", step="verifier", skipped=True)
+    elif confidence >= config.VERIFY_BELOW:
+        obs.emit("step", f"Reader was {confidence:.0%} confident - one reading is enough",
+                 agent="orchestrator", step="verifier", skipped=True)
+    else:
+        obs.emit("route", f"Only {confidence:.0%} confident - delegating to Verifier",
+                 agent="reader", to="verifier")
+        out = await verifier(provider, image_b64, out)
     return out
 
 
