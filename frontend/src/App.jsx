@@ -69,8 +69,13 @@ export default function App() {
 
   // And the panels themselves can be put away: with the window maximised they
   // are the only thing on screen that is not the notebook.
+  // Off unless asked for. Hidden, the panels do not mount at all: no event
+  // stream, no repeating re-render, no large SVG in either margin. On a
+  // laptop sharing one chip between the model and a 3K display that is the
+  // difference between a steady screen and an unusable one, and the notebook
+  // is what the student came for.
   const [rails, setRails] = useState(
-    () => localStorage.getItem('inkwise.rails') !== '0')
+    () => localStorage.getItem('inkwise.rails') === '1')
   useEffect(() => {
     localStorage.setItem('inkwise.rails', rails ? '1' : '0')
   }, [rails])

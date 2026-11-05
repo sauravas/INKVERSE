@@ -39,6 +39,9 @@ export const AGENT_SHORT = {
 }
 
 const MAX_EVENTS = 400
+// after this long with no end event, treat an agent as finished rather than
+// animating on its behalf forever
+const STALE_MS = 120000
 const FLASH_MS = 1800
 
 export function useAgentFeed(provider) {
@@ -102,6 +105,7 @@ export function useAgentFeed(provider) {
   // derive live state from the event list
   const derived = useMemo(() => {
     const running = {}          // agent -> {count, message, since}
+    const started = {}          // agent -> ts of its last start
     const runs = {}             // trace -> run.start event
     const lastEnd = {}          // agent -> agent.end event
     const liveEdges = {}        // "from>to" -> ts
@@ -114,6 +118,7 @@ export function useAgentFeed(provider) {
       if (ev.kind === 'agent.start') {
         const r = running[a] || { count: 0 }
         running[a] = { count: r.count + 1, message: ev.message, since: ev.ts }
+        started[a] = ev.ts
         liveEdges[`${ev.data?.caller || 'orchestrator'}>${a}`] = ev.ts
       } else if (ev.kind === 'agent.end') {
         if (running[a]) {
@@ -133,6 +138,14 @@ export function useAgentFeed(provider) {
         for (const m of ev.data?.models || []) resident.delete(m)
       }
     }
+    // An agent.start whose agent.end never arrived - a restarted server, or an
+    // end that scrolled out of the buffer - would otherwise leave an agent
+    // "running" for the rest of the session, and the ticker below runs for as
+    // long as anything is running. Nothing here takes two minutes.
+    for (const a of Object.keys(running)) {
+      if (now - (started[a] || 0) * 1000 > STALE_MS) delete running[a]
+    }
+
     // an edge stays lit while its target runs, then fades out
     const edges = {}
     for (const [key, ts] of Object.entries(liveEdges)) {
@@ -170,7 +183,11 @@ export function useAgentFeed(provider) {
     || Object.keys(derived.flash).length > 0 || Object.keys(derived.edges).length > 0
   useEffect(() => {
     if (!animating) return undefined
-    const t = setInterval(() => setNow(Date.now()), 400)
+    // and never while the tab is in the background, where the only thing it
+    // can do is cost the machine work for a panel nobody is looking at
+    const t = setInterval(() => {
+      if (document.visibilityState === 'visible') setNow(Date.now())
+    }, 400)
     return () => clearInterval(t)
   }, [animating])
 
