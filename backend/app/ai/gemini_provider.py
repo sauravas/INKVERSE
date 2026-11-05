@@ -6,12 +6,13 @@ here when the request carries an explicit user consent flag — see routers/ai.p
 """
 from __future__ import annotations
 
+import json
 import time
 from typing import AsyncIterator
 
 import httpx
 
-from .. import config
+from .. import config, obs
 from .base import ProviderError
 from . import prompts
 
@@ -52,6 +53,8 @@ class GeminiProvider:
             "generationConfig": cfg,
         }
         url = (f"{config.GEMINI_URL}/{self.model}:streamGenerateContent?alt=sse")
+        obs.emit("model.call", f"{self.model} (cloud, user consented)",
+                 model=self.model, warm=True, provider="gemini")
         try:
             async with httpx.AsyncClient(timeout=config.REQUEST_TIMEOUT) as c:
                 async with c.stream("POST", url, json=body,
@@ -92,6 +95,18 @@ class GeminiProvider:
             "stage": "vision",
         })
         return data
+
+    async def reread(self, image_b64: str) -> dict:
+        """An independent second reading, used by the Verifier agent."""
+        acc = []
+        async for piece in self._stream(
+            prompts.EXTRACT_SYSTEM,
+            [{"text": prompts.VERIFY_USER},
+             {"inlineData": {"mimeType": "image/png", "data": image_b64}}],
+            temp=0.0, max_tokens=800,
+        ):
+            acc.append(piece)
+        return prompts.parse_extraction("".join(acc))
 
     def solve(self, question: str, subject: str = "") -> AsyncIterator[str]:
         sl = f"Subject: {subject}\n\n" if subject else ""
