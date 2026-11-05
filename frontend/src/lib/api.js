@@ -128,7 +128,9 @@ function foldSteps(events) {
       cur = { index: e.index, title: e.title, final: e.final, segments: [] }
       steps.push(cur)
     } else if (e.type === 'segment' && cur) {
-      cur.segments.push({ kind: e.kind, value: e.value, display: e.display })
+      cur.segments.push({ kind: e.kind, value: e.value, display: e.display,
+                          ...(e.diagram ? { diagram: e.diagram } : {}),
+                          ...(e.table ? { table: e.table } : {}) })
     }
   }
   return steps

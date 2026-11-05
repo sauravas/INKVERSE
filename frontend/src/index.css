@@ -19,6 +19,19 @@
   --color-accent: #2f6fed;
 }
 
+/* --- the ruled page ----------------------------------------------------------
+   One rule = one line of handwriting. --rule-shift and --math-shift are measured
+   from the real fonts at startup (lib/lines.js calibrate) so the rule sits just
+   under the text baseline and inline maths shares that baseline.            */
+:root {
+  --rule: 2rem;
+  --rule-shift: -8px;
+  --math-shift: 0em;
+  --rule-gradient: linear-gradient(to bottom, transparent 0,
+    transparent calc(var(--rule) - 1px), var(--color-rule) calc(var(--rule) - 1px),
+    var(--color-rule) var(--rule));
+}
+
 html, body, #root {
   height: 100%;
   margin: 0;
@@ -47,10 +60,43 @@ html, body, #root {
 /* Ruled-paper background, drawn in CSS so it costs no canvas time. */
 .ruled {
   background-color: var(--color-paper);
-  background-image:
-    linear-gradient(to bottom, transparent 0, transparent calc(2rem - 1px), var(--color-rule) calc(2rem - 1px), var(--color-rule) 2rem);
-  background-size: 100% 2rem;
+  background-image: var(--rule-gradient);
+  background-size: 100% var(--rule);
+  background-position: 0 var(--rule-shift);
 }
+
+/* every line of text on the page is exactly one rule tall */
+.lined-text { line-height: var(--rule); }
+.lined-row { line-height: var(--rule); min-height: var(--rule); }
+/* exactly one line, whatever mix of sizes it holds (mixed font sizes on one
+   baseline would otherwise make the row a few pixels taller than a rule) */
+.lined-one { line-height: var(--rule); height: var(--rule); overflow: visible; }
+
+/* typed text is part of the page: ruled, handwritten, growing a line at a time */
+.lined-wrap { display: flex; align-items: flex-start; gap: 0.5rem; }
+.lined-input {
+  flex: 1;
+  display: block;
+  resize: none;
+  overflow: hidden;
+  border: 0;
+  outline: none;
+  padding: 0 0.25rem;
+  margin: 0;
+  color: var(--color-ink);
+  line-height: var(--rule);
+  background-color: transparent;
+  background-image: var(--rule-gradient);
+  background-size: 100% var(--rule);
+  background-position: 0 var(--rule-shift);
+  background-attachment: local;
+}
+.lined-input::placeholder { color: color-mix(in srgb, var(--color-ink-soft) 55%, transparent); }
+.lined-input:focus { box-shadow: inset 2px 0 0 0 var(--color-accent); }
+.lined-body { font-size: 1.42rem; }
+.lined-small { font-size: 1.2rem; }
+.lined-large { font-size: 1.6rem; }
+.lined-actions { display: flex; align-items: center; height: var(--rule); gap: 0.25rem; }
 
 /* KaTeX is kept legible rather than forced into a handwriting face, but it is
    tinted and tilted slightly so it sits naturally in a handwritten answer. */
@@ -58,8 +104,16 @@ html, body, #root {
   color: var(--color-ink);
   font-size: 1.04em;
 }
+/* Inline maths takes exactly one line box (so a fraction never pushes the
+   lines below it off the rules) and is nudged so its baseline matches the
+   handwriting's; tall pieces simply overhang, as they would on paper.      */
 .ink-math--tilt {
   display: inline-block;
+  height: var(--rule);
+  line-height: var(--rule);
+  vertical-align: top;
+  position: relative;
+  top: var(--math-shift);
   transform: rotate(-0.35deg);
 }
 
@@ -103,3 +157,37 @@ html, body, #root {
 @media print {
   .no-print { display: none !important; }
 }
+
+/* --- hand-drawn diagrams --------------------------------------------------
+   Each stroke has pathLength=1, so a dash of length 1 offset by 1 hides it
+   and animating the offset to 0 traces it from start to end like a pen.     */
+@keyframes ink-draw { to { stroke-dashoffset: 0; } }
+.ink-stroke {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: ink-draw var(--d) cubic-bezier(0.45, 0.05, 0.35, 1) var(--t) forwards;
+}
+/* labels are uncovered left to right, the way handwriting appears */
+@keyframes ink-write { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+.ink-write {
+  transform-box: fill-box;
+  transform-origin: left center;
+  transform: scaleX(0);
+  animation: ink-write var(--d) linear var(--t) forwards;
+}
+/* No prefers-reduced-motion override: the drawing is the feature the student
+   asked for, and it must behave like the handwriting, which always animates.
+   (This laptop has Windows animation effects off, so the browser reports
+   reduced motion everywhere and an override would silently disable it.) */
+
+/* --- hand-ruled tables: rows are whole ruled lines, no borders of their own */
+.hand-table { border-collapse: collapse; font-size: 1.3rem; color: var(--color-ink); }
+.hand-table th, .hand-table td {
+  padding: 0 0.7rem;
+  line-height: var(--rule);
+  vertical-align: top;
+  text-align: left;
+  border: 0;
+}
+.hand-table th { font-variation-settings: 'wght' 640; color: var(--color-accent); }
+@keyframes ink-reveal { to { clip-path: inset(0 0 0 0); } }

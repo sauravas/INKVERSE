@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import AnswerSheet, { stepsToText } from './components/AnswerSheet'
+import AnswerSheet, { RichText, stepToText, stepsToText } from './components/AnswerSheet'
 import Dashboard from './components/Dashboard'
 import ImportView from './components/ImportView'
 import InkCanvas from './components/InkCanvas'
+import LinedInput from './components/LinedInput'
+import MicButton from './components/MicButton'
 import PairPanel from './components/PairPanel'
 import { PenTools, ToolBtn } from './components/PenTools'
 import PracticeView from './components/PracticeView'
@@ -10,9 +12,12 @@ import { SourcesNote, useStepQuestions } from './components/StepTools'
 import { api, streamSteps } from './lib/api'
 import { PEN_COLORS } from './lib/ink'
 import { useWorkspace } from './lib/sync'
+import { applyChoice, differences } from './lib/clarify'
+import { canSpeak, speak, speakableStep } from './lib/speak'
 
 const ROOM_KEY = 'inkwise.room'
 const WEB_KEY = 'inkwise.web'
+const SPEAK_KEY = 'inkwise.speak'
 const VIEWS = [
   ['notebook', 'Notebook'], ['practice', 'Question bank'],
   ['dashboard', 'Dashboard'], ['import', 'Import'],
@@ -54,6 +59,22 @@ export default function App() {
   const [phase, setPhase] = useState('idle')  // idle|extracting|review|solving|done
   const [extracted, setExtracted] = useState(null)
   const [questionText, setQuestionText] = useState('')
+  // a question typed (or dictated) straight onto the page, on the lines
+  const [typed, setTyped] = useState('')
+  // what has been asked and answered in this sitting, for "now integrate that"
+  const sessionLog = useRef([])
+  const lastSteps = useRef([])
+  // voice: dictation into the question box, and answers read back
+  const dictBase = useRef(null)
+  const voiceTurn = useRef(false)
+  const stopSpeaking = useRef(() => {})
+  const [autoSolve, setAutoSolve] = useState(false)
+  const [speakAll, setSpeakAll] = useState(() => localStorage.getItem(SPEAK_KEY) === '1')
+  const toggleSpeak = () => {
+    localStorage.setItem(SPEAK_KEY, speakAll ? '0' : '1')
+    if (speakAll) stopSpeaking.current()
+    setSpeakAll(!speakAll)
+  }
   const [steps, setSteps] = useState([])
   const [sources, setSources] = useState([])
   const [notices, setNotices] = useState([])
@@ -143,19 +164,40 @@ export default function App() {
     }
   }
 
-  const solve = () => {
-    const q = questionText.trim()
+  const solve = (explicit) => {
+    let q = (typeof explicit === 'string' ? explicit : questionText).trim()
     if (!q) return
+    stopSpeaking.current()
+    setAutoSolve(false)
+    if (typeof explicit === 'string') {
+      setQuestionText(q); setQuestionId(null); setExtracted(null)
+      ask.setExplanations({}); setSelectedStep(null)
+    } else if (extracted?.diagram) {
+      // a drawing in the question is part of the question
+      q = `${q}\n\n(The student's page also shows a drawing: ${extracted.diagram})`
+    }
     setErr(null); setPhase('solving'); setSteps([]); setSources([]); setNotices([])
     setStats(null)
     abortRef.current = streamSteps('/api/ai/solve', {
       question: q, subject: extracted?.subject_guess || '',
       provider, consent_cloud: !!consent, question_id: questionId, web,
+      session: sessionLog.current.slice(-3),
     }, {
-      onSteps: setSteps,
+      onSteps: (st) => { setSteps(st); lastSteps.current = st },
       onSources: setSources,
       onNotice: (n) => setNotices((x) => [...x, n]),
-      onDone: (s) => { setStats(s); setPhase('done') },
+      onDone: (s) => {
+        setStats(s); setPhase('done')
+        // remember the question and its result for follow-on questions
+        const final = lastSteps.current.find((x) => x.final) || lastSteps.current.at(-1)
+        sessionLog.current = [...sessionLog.current, {
+          question: q, answer: final ? stepToText(final) : '' }].slice(-6)
+        // asked by voice (or always, if chosen): read the answer back
+        if ((voiceTurn.current || speakAll) && canSpeak()) {
+          stopSpeaking.current = speak(lastSteps.current.map(speakableStep))
+        }
+        voiceTurn.current = false
+      },
       onError: (e) => { setErr(e.message); setPhase('idle') },
     })
   }
@@ -196,7 +238,7 @@ export default function App() {
                  || (e.key.toLowerCase() === 'z' && e.shiftKey))) {
         e.preventDefault(); canvas.current?.redo()
       } else if (mod && e.key === 'Enter') {
-        e.preventDefault(); if (phase === 'idle' || phase === 'done') readPage()
+        e.preventDefault(); if (phase === 'idle' || phase === 'done') solveOrRead()
       } else if (e.key === 'e') setTool('eraser')
       else if (e.key === 'p') setTool('pen')
       else if (e.key === 'h') setTool('highlighter')
@@ -207,6 +249,27 @@ export default function App() {
 
   const busy = phase === 'extracting' || phase === 'solving'
   const ai = { provider, consent, web }
+  // Solve answers the typed question if there is one, else reads the page
+  const solveOrRead = () => (typed.trim() ? solve(typed) : readPage())
+
+  // spoken words go into the question box as they are recognised
+  const onDictText = (committed, partial) => {
+    if (dictBase.current === null) dictBase.current = typed ? `${typed.trim()} ` : ''
+    setAutoSolve(false)
+    setTyped(`${dictBase.current}${committed}${partial ? ` ${partial}` : ''}`.trimStart())
+  }
+  const onDictDone = (text) => {
+    const full = `${dictBase.current ?? ''}${text}`.trim()
+    dictBase.current = null
+    setTyped(full)
+    voiceTurn.current = true
+    setAutoSolve(true)               // solve shortly, unless the student edits it
+  }
+  useEffect(() => {
+    if (!autoSolve || !typed.trim() || busy) return undefined
+    const t = setTimeout(() => solve(typed), 2000)
+    return () => clearTimeout(t)
+  }, [autoSolve, typed, busy])      // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="flex h-full flex-col">
@@ -216,6 +279,7 @@ export default function App() {
         provider={provider} setProvider={setProvider} providers={providers}
         health={health} onRefreshHealth={refreshHealth}
         web={web} onToggleWeb={toggleWeb}
+        speakAll={speakAll} onToggleSpeak={toggleSpeak}
       />
 
       {view === 'dashboard' && (
@@ -246,7 +310,8 @@ export default function App() {
             tool={tool} setTool={setTool} color={color} setColor={setColor}
             size={size} setSize={setSize} canvas={canvas}
             pages={pages} active={active} inkCount={inkCount}
-            busy={busy} onSolve={readPage} onStop={stop}
+            busy={busy} onSolve={solveOrRead} onStop={stop}
+            canSolve={inkCount > 0 || typed.trim().length > 0}
             canSave={steps.length > 0 && !questionId}
             onSaveStudy={saveToStudy}
             onSaveNotebook={async () => {
@@ -281,12 +346,23 @@ export default function App() {
                   showRule={false} fitWidth
                   onPagesChange={onPagesChange} onInkChange={onInkChange}
                 />
+                <LinedInput value={typed} className="px-5"
+                            onChange={(v) => { setTyped(v); setAutoSolve(false) }}
+                            placeholder="…or type or say your question, and press Enter"
+                            onSubmit={() => solve(typed)} disabled={busy}>
+                  <MicButton onText={onDictText} onDone={onDictDone}
+                             title="Ask by voice — stop talking and it solves" />
+                </LinedInput>
+                {autoSolve && typed.trim() && !busy && (
+                  <p className="lined-row px-5 text-xs text-ink-soft">
+                    solving in 2 seconds… change the text to stop it
+                  </p>
+                )}
 
                 {(steps.length > 0 || busy) && (
-                  <div data-answer-start className="px-5 pb-10 pt-2">
-                    <div className="mb-2 flex items-center gap-2 border-t border-dashed
-                                    border-rule pt-3">
-                      <span className="hand text-[1.6rem] text-emerald-800">Answer</span>
+                  <div data-answer-start className="px-5 pb-[var(--rule)]">
+                    <div className="lined-row flex items-baseline gap-2">
+                      <span className="hand lined-text text-[1.6rem] text-emerald-800">Answer</span>
                       {stats && (
                         <span className="text-[11px] text-ink-soft/70">
                           first ink {stats.ttft}s · {stats.total}s
@@ -309,15 +385,16 @@ export default function App() {
                       onAskStep={(s) => { setSelectedStep(s); ask.setAsking(s) }}
                       emptyHint=" "
                       afterStep={ask.afterStep}
+                      onAskBlock={ask.askBlock}
                     />
                   </div>
                 )}
 
                 {steps.length === 0 && !busy && (
-                  <p className="hand px-5 pb-8 pt-3 text-[1.35rem] text-ink-soft/45">
+                  <p className="hand lined-text px-5 pb-[var(--rule)] text-[1.35rem] text-ink-soft/45">
                     {inkCount > 0
                       ? 'Press Solve — the answer will be written here.'
-                      : 'Write a question above, then press Solve.'}
+                      : 'Write or type a question above, then press Solve.'}
                   </p>
                 )}
               </div>
@@ -345,7 +422,7 @@ export default function App() {
 /* -------------------------------------------------------------------- bars */
 
 function TopBar({ view, setView, sync, onPair, provider, setProvider, providers,
-                  health, onRefreshHealth, web, onToggleWeb }) {
+                  health, onRefreshHealth, web, onToggleWeb, speakAll, onToggleSpeak }) {
   const phones = sync.peers.filter((p) => p.role === 'phone').length
   const dot = sync.status === 'live' ? '#0ca30c'
     : sync.status === 'offline' ? '#d03b3b' : '#fab219'
@@ -381,6 +458,16 @@ function TopBar({ view, setView, sync, onPair, provider, setProvider, providers,
                   ? 'bg-sky-50 text-sky-800 ring-1 ring-sky-300' : 'text-ink-soft hover:bg-black/5'}`}>
           🌐 Web {web ? 'on' : 'off'}
         </button>
+        {canSpeak() && (
+          <button onClick={onToggleSpeak}
+                  title={speakAll ? 'Every answer is read aloud (on this laptop\'s own voice)'
+                    : 'Answers are read aloud only when you ask by voice'}
+                  className={`rounded-lg px-2 py-1 ${speakAll
+                    ? 'bg-emerald-50 text-emerald-800 ring-1 ring-emerald-300'
+                    : 'text-ink-soft hover:bg-black/5'}`}>
+            {speakAll ? '🔊 Read aloud' : '🔈 Voice replies'}
+          </button>
+        )}
         <span className="inline-flex items-center gap-1.5">
           <span className="inline-block h-2 w-2 rounded-full" style={{ background: dot }} />
           {sync.status}{sync.latency != null && sync.status === 'live'
@@ -431,7 +518,7 @@ function ModelPill({ health, onRefresh }) {
 }
 
 function Toolbar({ tool, setTool, color, setColor, size, setSize, canvas,
-                   pages, active, inkCount, busy, onSolve, onStop,
+                   pages, active, inkCount, busy, onSolve, onStop, canSolve,
                    canSave, onSaveStudy, onSaveNotebook }) {
   const freePages = pages.filter((p) => !isQuestionPage(p))
   const pos = freePages.findIndex((p) => p.id === pages[active]?.id)
@@ -460,7 +547,7 @@ function Toolbar({ tool, setTool, color, setColor, size, setSize, canvas,
             Stop
           </button>
         ) : (
-          <button onClick={onSolve} disabled={!inkCount}
+          <button onClick={onSolve} disabled={!canSolve}
                   className="shrink-0 whitespace-nowrap rounded-lg bg-accent px-3 py-1.5
                              text-sm text-white disabled:opacity-40">
             Solve ⌘↵
@@ -499,6 +586,20 @@ function ReviewBar({ extracted, value, onChange, onSolve, onReread, onCancel }) 
   const conf = extracted?.confidence ?? 0
   const low = conf < 0.6
   const alt = extracted?.alternative
+  // where the two readings disagree, as specific questions for the student
+  const diffs = useMemo(
+    () => (alt ? differences(extracted.question, alt) : []), [alt, extracted?.question])
+  const [picked, setPicked] = useState({})
+  const choose = (i, useTheirs) => {
+    const next = { ...picked, [i]: useTheirs }
+    setPicked(next)
+    // re-apply every choice to the first reading, right to left so the token
+    // positions of earlier differences stay valid
+    let text = extracted.question
+    diffs.map((d, j) => [d, j]).sort((a, b) => b[0].at[0] - a[0].at[0])
+      .forEach(([d, j]) => { if (next[j]) text = applyChoice(text, d, true) })
+    onChange(text)
+  }
   return (
     <div className="border-b border-black/10 bg-amber-50/70 px-4 py-3">
       <div className="mx-auto max-w-3xl">
@@ -523,25 +624,45 @@ function ReviewBar({ extracted, value, onChange, onSolve, onReread, onCancel }) 
           </button>
         </div>
 
-        {alt && (
-          // the two readings disagreed, so the student picks rather than us
-          <div className="mb-2 rounded-lg border border-amber-400 bg-white/70 px-3 py-2">
+        {diffs.length > 0 && (
+          // ask about the exact spot, not "here are two sentences, compare them"
+          <div className="mb-2 space-y-1.5 rounded-lg bg-white/70 px-3 py-2 ring-1 ring-amber-400">
             <div className="text-[11px] font-medium text-amber-900">
-              The two readings disagreed — check the numbers:
+              I'm not sure what you wrote {diffs.length === 1 ? 'here' : 'in these places'}:
             </div>
-            <button type="button" onClick={() => onChange(alt)}
-                    className="mt-1 block w-full rounded border border-amber-300
-                               bg-amber-50 px-2 py-1 text-left font-mono text-[12px]
-                               hover:bg-amber-100">
-              {alt}
-              <span className="ml-2 text-[10px] text-amber-700">use this instead</span>
-            </button>
+            {diffs.map((d, i) => (
+              <div key={i} className="flex flex-wrap items-center gap-1.5 text-sm">
+                {d.before && <span className="text-ink-soft">…{d.before}</span>}
+                {[[false, d.mine], [true, d.theirs]].map(([theirs, txt]) => (
+                  <button key={String(theirs)} type="button" onClick={() => choose(i, theirs)}
+                          className={`rounded-md px-2 py-0.5 ring-1 ${
+                            (picked[i] ?? false) === theirs
+                              ? 'bg-amber-200 ring-amber-500' : 'bg-white ring-amber-300 hover:bg-amber-50'}`}>
+                    {txt ? <RichText text={txt} className="hand text-[1.15rem]" />
+                      : <span className="text-xs text-ink-soft">(nothing)</span>}
+                  </button>
+                ))}
+                <span className="text-ink-soft">?</span>
+              </div>
+            ))}
           </div>
         )}
+        {!diffs.length && low && (
+          <p className="mb-2 text-[12px] text-amber-900">
+            Parts of this were hard to read. Fix anything wrong below, or write it
+            again more clearly and press Read again.
+          </p>
+        )}
 
-        <textarea value={value} onChange={(e) => onChange(e.target.value)} rows={2}
-                  className="w-full resize-y rounded-lg border border-amber-300 bg-white
-                             px-3 py-2 font-mono text-[13px] leading-5" />
+        <div className="rounded-lg bg-white/70 px-1 ring-1 ring-amber-300">
+          <LinedInput value={value} onChange={onChange} onSubmit={onSolve} minLines={2} />
+        </div>
+        {/\$|\\\(/.test(value) && (
+          // how the maths will actually read, so a wrong exponent is visible
+          <p className="mt-1 text-[11px] text-amber-900/80">
+            reads as: <RichText text={value} className="hand text-[1.15rem] text-ink" />
+          </p>
+        )}
         <div className="mt-2 flex gap-2">
           <button onClick={onSolve}
                   className="rounded-lg bg-accent px-3 py-1.5 text-sm text-white">

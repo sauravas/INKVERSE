@@ -4,7 +4,7 @@ import AnswerSheet, { WrittenText } from './AnswerSheet'
 import InkCanvas from './InkCanvas'
 import NotesView from './NotesView'
 import { PenTools } from './PenTools'
-import { SourcesNote, useStepQuestions } from './StepTools'
+import { SourcesNote, threadsFromRows, useStepQuestions } from './StepTools'
 
 const OUTCOMES = [
   ['knew', 'I knew it', 'bg-emerald-600'],
@@ -211,9 +211,7 @@ function Session({ module, sync, ai, pen, onExit, onNotes }) {
     api.practiceQuestion(q.id).then((d) => {
       if (dead) return
       setDetail(d)
-      ask.setExplanations(Object.fromEntries(d.explanations
-        .filter((e) => e.step_index != null)
-        .map((e) => [e.step_index, { ask: e.ask, steps: e.steps, instant: true }])))
+      ask.setExplanations(threadsFromRows(d.explanations))
       // laptop and phone both land on this question's answer page
       sync.send({ t: 'page_open', id: `q-${q.id}`, title: `Q${idx + 1}`,
                   strokes: d.attempt?.strokes || [] })
@@ -252,6 +250,7 @@ function Session({ module, sync, ai, pen, onExit, onNotes }) {
     }, {
       onSteps: (st) => { hintSteps.current = st; setHint((h) => ({ ...h, steps: st })) },
       onSources: (items) => setHint((h) => ({ ...h, sources: items })),
+      onNotice: (n) => setHint((h) => ({ ...h, notices: [...(h.notices || []), n] })),
       onDone: () => {
         const st = hintSteps.current
         setHint((h) => ({ ...h, streaming: false }))
@@ -390,42 +389,42 @@ function Session({ module, sync, ai, pen, onExit, onNotes }) {
                         ring-1 ring-paper-edge" style={{ width: 'min(94%, 880px)' }}>
           <div className="border-l-2 border-margin/70" style={{ marginLeft: '8%' }}>
             {/* the question, written onto the page */}
-            <div className="px-5 pb-2 pt-4">
-              <div className="mb-1 flex items-center gap-2 text-[11px] uppercase tracking-wide
+            <div className="px-5 pt-[var(--rule)]">
+              <div className="lined-row flex items-center gap-2 text-[11px] uppercase tracking-wide
                               text-ink-soft/70">
                 <span>Question {idx + 1}</span>
                 {q.marks && <span className="rounded bg-black/5 px-1.5 normal-case">{q.marks} marks</span>}
                 {q.important ? <span style={{ color: '#b07800' }}>★ important</span> : null}
               </div>
               <WrittenText key={q.id} text={q.text}
-                           className="hand block text-[1.6rem] leading-8 text-ink" />
+                           className="hand lined-text block text-[1.6rem] text-ink" />
             </div>
 
-            <div className="flex items-center gap-2 border-t border-dashed border-rule px-5 pt-2">
-              <span className="hand text-[1.3rem] text-ink-soft">Your answer</span>
+            <div className="lined-row flex items-baseline gap-2 px-5">
+              <span className="hand lined-text text-[1.3rem] text-ink-soft">Your answer</span>
             </div>
             <InkCanvas ref={canvas} sync={sync} tool={pen.tool} color={pen.color}
                        size={pen.size} showRule={false} fitWidth
                        onInkChange={setInkCount} />
 
             {hint && (
-              <div className="mx-5 my-3 rounded-lg border-l-4 border-amber-400 bg-amber-50/70 px-4 py-3">
-                <SourcesNote items={hint.sources} />
+              <div className="mx-5 rounded-lg border-l-4 border-amber-400 bg-amber-50/70 px-4">
+                <SourcesNote items={hint.sources} notices={hint.notices} />
                 <AnswerSheet steps={hint.steps} streaming={hint.streaming}
                              instant={hint.instant} dense emptyHint="Thinking of a hint…" />
               </div>
             )}
 
             {answer && (
-              <div data-answer className="px-5 pb-8 pt-2">
-                <div className="mb-2 border-t border-dashed border-rule pt-3">
-                  <span className="hand text-[1.6rem] text-emerald-800">Answer</span>
+              <div data-answer className="px-5 pb-[var(--rule)]">
+                <div className="lined-row">
+                  <span className="hand lined-text text-[1.6rem] text-emerald-800">Answer</span>
                 </div>
                 <SourcesNote items={answer.sources} notices={answer.notices} />
                 <AnswerSheet steps={answer.steps} streaming={answer.streaming}
                              instant={answer.instant} emptyHint="Working it out…"
                              onAskStep={(s) => ask.setAsking(s)}
-                             afterStep={ask.afterStep} />
+                             afterStep={ask.afterStep} onAskBlock={ask.askBlock} />
               </div>
             )}
           </div>

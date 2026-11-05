@@ -115,7 +115,7 @@ const MiniPad = forwardRef(function MiniPad({ height = 96, placeholder }, ref) {
       )}
       <canvas
         ref={cvRef}
-        className="ink-surface block w-full rounded-md border border-amber-200 bg-white/80"
+        className="ink-surface block w-full rounded-md bg-white/80 ring-1 ring-amber-200"
         onPointerDown={down}
         onPointerMove={move}
         onPointerUp={up}

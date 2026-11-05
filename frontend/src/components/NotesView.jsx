@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
 import AnswerSheet, { RichText } from './AnswerSheet'
-import { MarginNote } from './StepTools'
+import { MarginNote, threadsFromRows } from './StepTools'
 
 const OUTCOME = {
   knew: ['Knew it', 'bg-emerald-50 text-emerald-800 ring-emerald-200'],
@@ -113,9 +113,7 @@ export default function NotesView({ query, data: given, readOnly, onBack, shareT
 
 function QuestionNote({ n, q }) {
   const a = q.attempt
-  const notesByStep = Object.fromEntries(
-    q.explanations.filter((e) => e.step_index != null)
-      .map((e) => [e.step_index, { ask: e.ask, steps: e.steps, instant: true }]))
+  const notesByStep = threadsFromRows(q.explanations)
   const outcome = a?.outcome && OUTCOME[a.outcome]
 
   return (
@@ -154,7 +152,7 @@ function QuestionNote({ n, q }) {
           <div className="hand text-[1.3rem] text-emerald-800">Worked answer</div>
           <AnswerSheet steps={q.answer_steps} instant dense
                        afterStep={(s) => (notesByStep[s.index]
-                         ? <MarginNote index={s.index} ex={notesByStep[s.index]} /> : null)} />
+                         ? <MarginNote index={s.index} turns={notesByStep[s.index]} /> : null)} />
         </div>
       )}
     </div>

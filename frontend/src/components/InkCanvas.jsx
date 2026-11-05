@@ -5,6 +5,7 @@ import {
   PAGE_H, PAGE_W, Smoother, coalesced, contentLogicalHeight, drawSegments,
   pageRect, renderAll, strokesNear, strokesToPng, toLogical, uid, widthFitBox,
 } from '../lib/ink'
+import { snapToRules } from '../lib/lines'
 
 const ERASER_RADIUS = 14
 
@@ -87,7 +88,8 @@ const InkCanvas = forwardRef(function InkCanvas(
     if (fitWidth) {
       const scale = w / PAGE_W
       const logicalH = contentLogicalHeight(curPage()?.strokes)
-      h = Math.max(1, Math.round(logicalH * scale))
+      // a whole number of ruled lines, so whatever follows starts on a rule
+      h = snapToRules(logicalH * scale)
       wrap.style.height = `${h}px`           // breaks the h-full circularity
       box = widthFitBox(w)
     } else {

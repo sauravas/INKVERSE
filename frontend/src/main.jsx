@@ -4,6 +4,12 @@ import App from './App'
 import PhoneApp from './PhoneApp'
 import { SharedNotes } from './components/NotesView'
 import './index.css'
+import { calibrateLines } from './lib/lines'
+
+// put the rules under the real handwriting baseline once the font has loaded
+const calibrate = () => { try { window.__lines = calibrateLines() } catch { /* keep defaults */ } }
+calibrate()
+document.fonts?.ready.then(calibrate)
 
 // One bundle, three entry points: the laptop app, the phone pad at /phone,
 // and the read-only notes a friend opens from a share link at /notes/<token>.
