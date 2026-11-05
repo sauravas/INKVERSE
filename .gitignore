@@ -19,3 +19,6 @@ bench/math_images/
 bench/*.log
 bench/*.json
 bench/shot-*.png
+
+# presentation decks (kept outside version control)
+*.pptx
