@@ -40,6 +40,21 @@ the one port:
 .\start.ps1 -Dev        # same URL, rebuilds on save
 .\start.ps1 -Fresh      # force a clean frontend build
 .\start.ps1 -Port 9000  # somewhere else
+.\start.ps1 -Open       # and open a browser window that behaves
+```
+
+### If the screen flickers in fullscreen
+
+Not INKWISE: in fullscreen Chrome hands the display controller one
+surface to scan out directly instead of compositing the page, and on
+integrated graphics that are also running the model, that path tears.
+Windowed is steady. Confirmed on the development machine (Intel Arc
+140V) by launching Chrome with `--disable-direct-composition`, which
+stops it. `-Open` launches it that way for you. Updating the graphics
+driver is the real fix; running the models on the CPU
+(`INKWISE_CPU_ONLY=1`) also avoids the contention.
+
+```powershell
 ```
 
 ---

@@ -11,11 +11,14 @@
 #   .\start.ps1 -Dev        same port, rebuilds on save, API reloads on save
 #   .\start.ps1 -Port 9000  somewhere else
 #   .\start.ps1 -Fresh      force a clean rebuild of the frontend first
+#   .\start.ps1 -Open       also open it in a browser window that does not
+#                           flicker fullscreen on this machine (see below)
 param(
   [int]$Port = 8000,
   [switch]$Dev,
   [switch]$NoVoice,
-  [switch]$Fresh
+  [switch]$Fresh,
+  [switch]$Open
 )
 
 $ErrorActionPreference = 'Stop'
@@ -183,6 +186,33 @@ Write-Host "INKWISE on http://localhost:$Port" -ForegroundColor Green
 if ($lan) { Write-Host "  phone:   http://${lan}:$Port" -ForegroundColor Green }
 Write-Host '  one port serves the app, the API and the pairing socket.' -ForegroundColor DarkGray
 Write-Host ''
+
+# --------------------------------------------------------------- browser
+# Chrome in fullscreen stops compositing the page and hands the display
+# controller one surface to scan out directly. On this laptop's integrated
+# graphics - the same chip Ollama is using - that path tears the picture into
+# static. Windowed is fine; fullscreen is not. Verified by launching Chrome
+# with --disable-direct-composition, which stops it.
+#
+# So -Open starts the browser the way this machine needs it. Nothing about
+# INKWISE depends on it: any browser will serve, this one just does not
+# flicker.
+if ($Open) {
+  $chrome = 'C:\Program Files\Google\Chrome\Application\chrome.exe',
+            'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe',
+            "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe" |
+            Where-Object { Test-Path $_ } | Select-Object -First 1
+  if ($chrome) {
+    Write-Host 'Opening Chrome without direct composition (no fullscreen flicker).' `
+               -ForegroundColor Cyan
+    Start-Process $chrome -ArgumentList '--disable-direct-composition',
+                                        "--app=http://localhost:$Port"
+  } else {
+    Write-Host 'Chrome not found; open the address above yourself.' `
+               -ForegroundColor Yellow
+    Start-Process "http://localhost:$Port"
+  }
+}
 
 $uvicorn = @('-m', 'uvicorn', 'app.main:app', '--app-dir', 'backend',
              '--host', '0.0.0.0', '--port', "$Port")
