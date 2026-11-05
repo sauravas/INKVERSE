@@ -181,6 +181,7 @@ function Session({ module, sync, ai, pen, onExit, onNotes }) {
   const [list, setList] = useState(null)
   const [idx, setIdx] = useState(0)
   const [detail, setDetail] = useState(null)
+  const [marking, setMarking] = useState(null)   // {steps, streaming, verdict}
   const [hint, setHint] = useState(null)         // {steps, streaming, sources}
   const [answer, setAnswer] = useState(null)     // {steps, streaming, sources, instant}
   const [choosing, setChoosing] = useState(false)
@@ -214,7 +215,8 @@ function Session({ module, sync, ai, pen, onExit, onNotes }) {
     if (!q) return undefined
     let dead = false
     abortRef.current?.()
-    setHint(null); setAnswer(null); setChoosing(false); setErr(null); setDetail(null)
+    setHint(null); setAnswer(null); setMarking(null)
+    setChoosing(false); setErr(null); setDetail(null)
     api.practiceQuestion(q.id).then((d) => {
       if (dead) return
       setDetail(d)
@@ -299,6 +301,35 @@ function Session({ module, sync, ai, pen, onExit, onNotes }) {
     }
   }, [answer?.streaming])
 
+  // Ask the Examiner to mark what is actually on the page. The attempt is
+  // saved first, so the marking is of the same working the notes will keep.
+  const markMine = async () => {
+    setErr(null)
+    const strokes = canvas.current?.getStrokes?.() || []
+    if (!strokes.length) {
+      setErr('Write your attempt on the page first - there is nothing to mark.')
+      return
+    }
+    await saveWork()                       // mark exactly what gets kept
+    const image = canvas.current.toPng({ pad: 20, minSide: 40 })
+    setMarking({ steps: [], streaming: true })
+    const steps = { current: [] }
+    streamSteps(`/api/practice/question/${q.id}/mark`,
+      { image, marks: q.marks ? Number(q.marks) || null : null },
+      {
+        onEvent: (ev) => {
+          if (ev.type === 'transcript') {
+            setMarking((m) => ({ ...m, transcript: ev.value }))
+          } else if (ev.type === 'marked') {
+            setMarking((m) => ({ ...m, verdict: ev }))
+          }
+        },
+        onSteps: (st) => { steps.current = st; setMarking((m) => ({ ...m, steps: st })) },
+        onDone: () => setMarking((m) => ({ ...m, streaming: false })),
+        onError: (e) => { setErr(e.message); setMarking(null) },
+      })
+  }
+
   const finish = async (outcome) => {
     setChoosing(false)
     await saveWork()
@@ -352,7 +383,7 @@ function Session({ module, sync, ai, pen, onExit, onNotes }) {
   }
 
   const suggested = answer ? 'answer' : hint ? 'hint' : 'knew'
-  const busy = hint?.streaming || answer?.streaming
+  const busy = hint?.streaming || answer?.streaming || marking?.streaming
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -422,6 +453,50 @@ function Session({ module, sync, ai, pen, onExit, onNotes }) {
               </div>
             )}
 
+            {marking && (
+              <div className="mx-5 mb-2 rounded-lg border-l-4 border-violet-400
+                              bg-violet-50/70 px-4 pb-2">
+                <div className="lined-row flex items-baseline gap-3">
+                  <span className="hand lined-text text-[1.5rem] text-violet-900">
+                    Marked
+                  </span>
+                  {marking.verdict && (
+                    <span className="text-sm font-medium tabular-nums text-violet-900">
+                      {marking.verdict.awarded}/{marking.verdict.available}
+                      <span className="ml-2 font-normal text-violet-800/80">
+                        {marking.verdict.verdict}
+                      </span>
+                    </span>
+                  )}
+                  {marking.streaming && (
+                    <span className="text-xs text-ink-soft">marking…</span>
+                  )}
+                </div>
+                {marking.transcript && (
+                  <details className="mb-1 text-xs text-ink-soft">
+                    <summary className="cursor-pointer">
+                      what the Reader saw on your page
+                    </summary>
+                    <pre className="mt-1 whitespace-pre-wrap font-mono text-[11px]">
+                      {marking.transcript}
+                    </pre>
+                  </details>
+                )}
+                <AnswerSheet steps={marking.steps} streaming={marking.streaming}
+                             dense emptyHint="Reading your working…" />
+                {marking.verdict?.next && (
+                  <p className="lined-row text-sm text-violet-900">
+                    <span className="font-medium">Fix first: </span>
+                    {marking.verdict.next}
+                  </p>
+                )}
+                <p className="pb-1 text-[11px] text-ink-soft">
+                  Recorded as one recall attempt. Your readiness is still worked
+                  out from your records, not from this mark.
+                </p>
+              </div>
+            )}
+
             {answer && (
               <div data-answer className="px-5 pb-[var(--rule)]">
                 <div className="lined-row flex items-baseline">
@@ -476,6 +551,13 @@ function Session({ module, sync, ai, pen, onExit, onNotes }) {
                       className="rounded-lg border border-amber-400 bg-amber-50 px-3 py-1.5 text-sm
                                  text-amber-900 hover:bg-amber-100">
                 I'm stuck — give me a hint
+              </button>
+            )}
+            {!marking && (
+              <button onClick={markMine} disabled={busy}
+                      className="rounded-lg border border-violet-300 bg-violet-50 px-3 py-1.5
+                                 text-sm text-violet-900 hover:bg-violet-100">
+                Mark what I wrote
               </button>
             )}
             {!answer && (

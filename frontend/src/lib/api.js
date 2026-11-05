@@ -81,6 +81,13 @@ export const api = {
   deleteSource: (id) => del(`/api/import/sources/${id}`),
   reparseSource: (id) => post(`/api/import/sources/${id}/reparse`, {}),
 
+  // what to revise next, and why (rules only - no model is asked)
+  revisionPlan: (subjectId, limit = 12) => get('/api/revision/plan'
+    + `?limit=${limit}${subjectId ? `&subject_id=${subjectId}` : ''}`),
+  weakTopics: (subjectId, limit = 3) => get('/api/revision/weak'
+    + `?limit=${limit}${subjectId ? `&subject_id=${subjectId}` : ''}`),
+  marking: (qid) => get(`/api/practice/question/${qid}/marking`),
+
   // --- question-bank practice ----------------------------------------------
   practiceModule: (mid) => get(`/api/practice/module/${mid}`),
   practiceQuestion: (qid) => get(`/api/practice/question/${qid}`),

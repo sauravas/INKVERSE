@@ -7,6 +7,7 @@ import CircleLayer, { CircleToggle } from './components/CircleLayer'
 import Dashboard from './components/Dashboard'
 import ImportView from './components/ImportView'
 import NotesStudy from './components/NotesStudy'
+import RevisionView from './components/RevisionView'
 import InkCanvas from './components/InkCanvas'
 import LinedInput from './components/LinedInput'
 import MicButton from './components/MicButton'
@@ -25,7 +26,7 @@ const WEB_KEY = 'inkwise.web'
 const SPEAK_KEY = 'inkwise.speak'
 const VIEWS = [
   ['notebook', 'Notebook'], ['notes', 'Notes'], ['practice', 'Question bank'],
-  ['dashboard', 'Dashboard'], ['import', 'Import'],
+  ['revise', 'Revise'], ['dashboard', 'Dashboard'], ['import', 'Import'],
 ]
 // question-bank answer pages live in the same workspace, prefixed with q-
 const isQuestionPage = (p) => !!p?.id?.startsWith('q-')
@@ -238,6 +239,18 @@ export default function App() {
     } catch (e) { setErr(e.message) }
   }
 
+  // Open a filed question on the page, with whatever answer it already has.
+  // Shared by the dashboard and the revision queue so they cannot drift.
+  const openQuestion = (q) => {
+    setQuestionText(q.text); setQuestionId(q.id)
+    try {
+      const s = q.answer_json ? JSON.parse(q.answer_json) : (q.answer_steps || [])
+      setSteps(s); setStats(null); setPhase(s.length ? 'done' : 'review')
+    } catch { setSteps([]); setPhase('review') }
+    setSources([]); ask.setExplanations({}); setSelectedStep(null)
+    setView('notebook')
+  }
+
   // bring the answer into view as soon as the pen starts
   useEffect(() => {
     if (phase === 'solving' && sheetRef.current) {
@@ -302,16 +315,18 @@ export default function App() {
         speakAll={speakAll} onToggleSpeak={toggleSpeak}
       />
 
-      {view === 'dashboard' && (
-        <Dashboard onOpenQuestion={(q) => {
-          setQuestionText(q.text); setQuestionId(q.id)
-          try {
-            const s = q.answer_json ? JSON.parse(q.answer_json) : []
-            setSteps(s); setStats(null); setPhase(s.length ? 'done' : 'review')
-          } catch { setSteps([]); setPhase('review') }
-          setSources([]); ask.setExplanations({}); setSelectedStep(null)
-          setView('notebook')
-        }} />
+      {view === 'dashboard' && <Dashboard onOpenQuestion={openQuestion} />}
+
+      {view === 'revise' && (
+        <RevisionView
+          onOpenQuestion={async (q) => {
+            // the queue carries the question, not its answer; fetch the rest
+            try {
+              const full = await api.question(q.id)
+              openQuestion(full)
+            } catch { openQuestion(q) }
+          }}
+          onPractiseModule={() => setView('practice')} />
       )}
 
       {view === 'notes' && <NotesStudy ai={ai} />}
