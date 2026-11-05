@@ -117,6 +117,8 @@ MIGRATIONS = [
     ("questions", "source_id", "TEXT"),
     ("questions", "position", "INTEGER NOT NULL DEFAULT 0"),
     ("questions", "marks", "TEXT"),
+    # set when a subject arrived as a shared bundle, e.g. "Shared by Asha"
+    ("subjects", "origin", "TEXT"),
 ]
 
 

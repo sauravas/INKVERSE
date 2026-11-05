@@ -184,6 +184,23 @@ class Hub:
             await self.broadcast(rid, {"t": "pages", "snapshot": r.snapshot()})
             return
 
+        if t == "page_open":
+            # create-or-select a page with a known id, e.g. one per question in
+            # the question bank, so every device lands on the same answer page
+            pid = str(m.get("id") or "")[:64]
+            if not pid:
+                return
+            async with r.lock:
+                idx = next((i for i, p in enumerate(r.pages) if p["id"] == pid), None)
+                if idx is None:
+                    seed = m.get("strokes") or []
+                    r.pages.append({"id": pid, "title": str(m.get("title") or pid)[:80],
+                                    "strokes": [dict(s, pageId=pid) for s in seed]})
+                    idx = len(r.pages) - 1
+                r.active = idx
+            await self.broadcast(rid, {"t": "pages", "snapshot": r.snapshot()})
+            return
+
         if t == "page_select":
             async with r.lock:
                 i = int(m.get("index", 0))
