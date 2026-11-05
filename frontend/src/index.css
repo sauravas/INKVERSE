@@ -188,6 +188,19 @@ html, body, #root {
   .edge-live, .node-live, .agent-dot-live { animation: none; }
 }
 
+/* Fullscreen on an integrated GPU.
+   In fullscreen the browser stops compositing the page in the usual way and
+   hands the display controller a single opaque surface to scan out directly.
+   It is faster, and on a chip that is simultaneously running a language model
+   it is where the picture breaks up - which is why this flickers fullscreen
+   and is steady in a window. Promoting the app to its own composited layer
+   keeps the normal path, at the cost of one texture. */
+html.is-fullscreen body > #root,
+html.is-fullscreen body > div:first-child {
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
 /* Turned on from the top bar. The rails' looping SVG animations are the only
    thing on the page that repaints continuously; on integrated graphics that
    competes with the model for the same chip, so there has to be a way to stop

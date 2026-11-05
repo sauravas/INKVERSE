@@ -6,6 +6,23 @@
 export const PAGE_W = 1000
 export const PAGE_H = 1414
 
+/**
+ * Line spacing, in page units rather than pixels.
+ *
+ * The ruled lines belong to the page, not to the screen showing it. They used
+ * to be a fixed 32px in CSS while the ink was scaled to whatever width the
+ * canvas happened to have, so the two only lined up at one particular width:
+ * a phone (page at ~35%) looked right and a laptop (page at ~81%) showed the
+ * same handwriting at more than twice the height of its lines, spilling over
+ * them. Measured from the phone, where it looked correct.
+ */
+export const RULE_UNITS = 90
+
+/** Rule spacing in CSS pixels for a page drawn at this scale. */
+export function rulePx(scale) {
+  return RULE_UNITS * scale
+}
+
 export const PEN_COLORS = ['#16213a', '#1d4ed8', '#b91c1c', '#15803d', '#a16207']
 
 // --- geometry --------------------------------------------------------------

@@ -2,8 +2,10 @@ import {
   forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState,
 } from 'react'
 import {
-  PAGE_H, PAGE_W, Smoother, coalesced, contentLogicalHeight, drawSegments,
-  pageRect, renderAll, strokesNear, strokesToPng, toLogical, uid, widthFitBox,
+  PAGE_H, PAGE_W, RULE_UNITS, Smoother, coalesced, contentLogicalHeight,
+  drawSegments,
+  pageRect, renderAll, rulePx, strokesNear, strokesToPng, toLogical, uid,
+  widthFitBox,
 } from '../lib/ink'
 import { snapToRules } from '../lib/lines'
 
@@ -97,6 +99,15 @@ const InkCanvas = forwardRef(function InkCanvas(
       if (h < 1) return
       box = pageRect(w * dpr, h * dpr)
     }
+
+    // The lines belong to the page: at whatever scale this screen is showing
+    // it, one line of handwriting is one ruled line. Without this the ink is
+    // scaled to the canvas and the rules are not, so they agree on a phone
+    // and disagree on a laptop.
+    const pageScale = fitWidth ? w / PAGE_W : box.scale
+    wrap.style.setProperty('--rule', `${rulePx(pageScale).toFixed(2)}px`)
+    wrap.style.setProperty('--rule-shift',
+                           `${(-0.25 * RULE_UNITS * pageScale).toFixed(2)}px`)
 
     cv.style.width = `${w}px`
     cv.style.height = `${h}px`
