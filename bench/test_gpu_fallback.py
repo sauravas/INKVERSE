@@ -185,6 +185,57 @@ async def main():
     finally:
         op.config.VISION_CPU = False
 
+    print("\nrunning out of memory: our own model goes before the user's apps")
+    real_memory = op.resources.memory
+    try:
+        for name, free_before, free_after, expect_evict, expect_raise in [
+            ("tight, but evicting ourselves is enough", 5.7, 16.7, True, False),
+            ("plenty of room: nothing is disturbed", 20.0, 20.0, False, False),
+            ("not even our own memory is enough", 3.5, 4.0, True, True),
+        ]:
+            # not provider(): that helper stubs _guard out, which is the one
+            # thing these cases are about
+            p = op.OllamaProvider("gemma3:4b", "qwen2.5:14b")
+            loaded = {"qwen2.5:14b"}
+            evicted = []
+            p._sizes = {"gemma3:4b": 3_100_000_000, "qwen2.5:14b": 10_000_000_000}
+
+            async def _loaded(_l=loaded):
+                return set(_l)
+
+            async def _ensure():
+                return True
+
+            async def _unload(m=None, _l=loaded, _e=evicted):
+                _l.discard(m)
+                _e.append(m)
+                return {}
+
+            async def _wait_gone(m):
+                return None
+
+            p._loaded, p._ensure_server = _loaded, _ensure
+            p.unload, p._wait_gone = _unload, _wait_gone
+            op.resources.memory = lambda _l=loaded, a=free_before, b=free_after: {
+                "total_gb": 31.5, "free_gb": a if _l else b}
+
+            print(f"  {name}")
+            raised = None
+            try:
+                await p._guard("gemma3:4b")
+            except op.InsufficientMemory as e:
+                raised = e
+            check("    evicted the other stage" if expect_evict
+                  else "    left the other stage alone",
+                  bool(evicted) == expect_evict, evicted)
+            check("    refused the load" if expect_raise else "    allowed the load",
+                  (raised is not None) == expect_raise, str(raised))
+            if expect_raise:
+                check("    and still says what to do", "Close some applications"
+                      in str(raised))
+    finally:
+        op.resources.memory = real_memory
+
     print("\n" + ("ALL PASSED" if not fails else f"{fails} FAILED"))
     return 1 if fails else 0
 

@@ -220,6 +220,28 @@ class OllamaProvider:
         if not size:
             return
         ok, msg = resources.check(size, config.MIN_FREE_RAM_GB)
+        if not ok and self.staged:
+            # Before telling a student to close their browser, give back the
+            # memory we are holding ourselves.
+            #
+            # _exclusive() leaves the other stage resident once either one is
+            # pinned to the CPU, reasoning that two models only fight over
+            # memory if they are both on the GPU. That is wrong on a laptop
+            # whose GPU has no memory of its own: here "VRAM" is system RAM,
+            # so a 10 GB text model on the iGPU and a 3 GB vision model on the
+            # CPU are competing for the same 32 GB as everything else. Keeping
+            # both resident is still the right default - it is what makes a
+            # reading take 3 seconds instead of 23 - but when it does not fit,
+            # reloading is a far better answer than refusing.
+            other = (self.text_model if model == self.vision_model
+                     else self.vision_model)
+            if other != model and other in await self._loaded():
+                obs.emit("model.evict",
+                         f"Short of memory: evicting {other} to make room for "
+                         f"{model}", model=other, for_model=model)
+                await self.unload(other)
+                await self._wait_gone(other)
+                ok, msg = resources.check(size, config.MIN_FREE_RAM_GB)
         if not ok:
             obs.emit("guard.block", msg, level="error", model=model)
             raise InsufficientMemory(msg)
