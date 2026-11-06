@@ -92,6 +92,7 @@ function labelledHub(d) {
 
 /** When each stroke starts and how long it takes. Depends only on the data. */
 export function diagramTimeline(d) {
+  if (d.kind === 'figure' && d.figure) return figureTimeline(d)
   const at = { nodes: {}, edges: {} }
   const hub = labelledHub(d)
   let t = 0
@@ -227,7 +228,105 @@ function labelledLayout(d) {
   return { nodes: sized, edges, arrows: false, width: 2 * cx, height: height + CAPTION_H }
 }
 
+
+// ---------------------------------------------------------------- figures
+// A figure is a real drawing - a heart, a neuron - whose geometry came from
+// the backend's library, not from the model. Here it only has to be placed:
+// the drawing in the middle, its labels in the two margins, a leader line
+// from each label to the point it names.
+const FIG_GUTTER = 58
+const FIG_GAP = 10
+const T_OUT = 300          // one outline stroke
+const T_OUT_STEP = 170     // and how soon the next one starts
+
+/** Push labels apart so none overlaps, keeping each as near its part as it can. */
+function stackColumn(items) {
+  items.sort((a, b) => a.want - b.want)
+  let floor = 0
+  for (const it of items) {
+    const top = Math.max(it.want - it.h / 2, floor)
+    it.y = top + it.h / 2
+    floor = top + it.h + FIG_GAP
+  }
+  return floor
+}
+
+function figureLayout(d) {
+  const f = d.figure
+  const cols = { L: [], R: [] }
+  f.parts.forEach((p, i) => {
+    const lines = wrapLabel(p.label, 15)
+    const noteW = p.note ? textWidth(p.note, EDGE_PX) + 12 : 0
+    // each glyph is tilted a little as it is written, which makes the line
+    // slightly wider than a flat measurement of it: without the allowance the
+    // last letter of the longest label hangs off the edge of the figure
+    const w = Math.max(...lines.map((l) => textWidth(l, LABEL_PX)), noteW) * 1.04 + 12
+    cols[p.side === 'R' ? 'R' : 'L'].push({
+      id: `p${i}`, i, label: p.label, note: p.note, shape: 'note', lines,
+      side: p.side === 'R' ? 1 : -1, anchor: p, want: p.y,
+      w, width: w, h: lines.length * LINE_H + (p.note ? LINE_H : 0) + 8,
+    })
+  })
+  cols.L.forEach((n) => { n.height = n.h })
+  cols.R.forEach((n) => { n.height = n.h })
+  const colW = (list) => (list.length ? Math.max(...list.map((n) => n.w)) : 0)
+  const wL = colW(cols.L)
+  const wR = colW(cols.R)
+  const bottom = Math.max(stackColumn(cols.L), stackColumn(cols.R))
+
+  const figX = wL + FIG_GUTTER
+  const height = Math.max(f.box.h, bottom) + 8
+  const figY = (height - f.box.h) / 2        // the drawing sits centred
+  cols.L.forEach((n) => { n.x = wL / 2 })
+  cols.R.forEach((n) => { n.x = figX + f.box.w + FIG_GUTTER + wR / 2 })
+  const nodes = [...cols.L, ...cols.R]
+  nodes.forEach((n) => { n.y += 0 })
+
+  const edges = nodes.map((n) => ({
+    i: n.i, from: 'figure', to: n.id, label: n.note, note: true,
+    // From the point it names out to its label, with the short horizontal
+    // run next to the label that a textbook leader has: a single long
+    // diagonal into the middle of the drawing makes a starburst.
+    points: [{ x: figX + n.anchor.x, y: figY + n.anchor.y },
+             { x: n.x - n.side * (n.w / 2 + 24), y: n.y - (n.note ? LINE_H / 2 : 0) },
+             { x: n.x - n.side * (n.w / 2 + 6), y: n.y - (n.note ? LINE_H / 2 : 0) }],
+    width: n.note ? textWidth(n.note, EDGE_PX) + 10 : 0,
+    x: n.x, y: n.y + (n.lines.length * LINE_H) / 2 + 2,
+  }))
+  return {
+    nodes, edges, arrows: false, figure: f, figX, figY,
+    width: figX + f.box.w + FIG_GUTTER + wR, height: height + CAPTION_H,
+  }
+}
+
+/** The outline first, stroke by stroke, then each label with its leader. */
+function figureTimeline(d) {
+  const at = { nodes: {}, edges: {}, outline: [] }
+  const capChars = d.title.length + 6
+  at.caption = { t: 0, d: capChars * T_CHAR }
+  at.underline = { t: capChars * T_CHAR, d: 320 }
+  let t = capChars * T_CHAR + 200
+  d.figure.strokes.forEach((_, i) => {
+    at.outline.push({ t: t + i * T_OUT_STEP, d: T_OUT })
+  })
+  t += (d.figure.strokes.length - 1) * T_OUT_STEP + T_OUT + 260
+  d.figure.parts.forEach((p, i) => {
+    const write = Math.max(220, p.label.length * T_CHAR)
+    const note = p.note ? Math.max(180, p.note.length * T_CHAR * 0.85) : 0
+    at.nodes[`p${i}`] = { box: { t, d: 0 }, label: { t: t + T_EDGE * 0.6, d: write } }
+    at.edges[i] = {
+      line: { t, d: T_EDGE }, head: { t: t + T_EDGE * 0.5, d: T_HEAD },
+      label: { t: t + T_EDGE * 0.6 + write, d: note },
+    }
+    t += T_EDGE * 0.6 + write + note + T_GAP
+  })
+  return { at, total: t }
+}
+
 function layout(d) {
+  if (d.kind === 'figure' && d.figure) {
+    try { return figureLayout(d) } catch { /* fall back to a layered layout */ }
+  }
   if (d.kind === 'cycle') {
     try { return cycleLayout(d) } catch { /* fall back to a layered layout */ }
   }
@@ -370,6 +469,9 @@ export default function HandDiagram({ diagram: d, animate = true, onNodeClick })
     return {
       nodes: L.nodes.map((n, i) => shapePaths(gen, n, seed + i * 7)),
       edges: L.edges.map((e) => edgePaths(gen, e, seed + 1000 + e.i * 11, L.arrows)),
+      outline: (L.figure?.strokes || []).map((p, i) => gen.toPaths(
+        gen.path(p, { seed: seed + i * 5, roughness: 1.15, bowing: 1.1,
+                      stroke: INK, strokeWidth: 1.8, fill: undefined }))),
       underline: gen.toPaths(gen.curve(
         Array.from({ length: 6 }, (_, i) => [
           16 + (i / 5) * Math.min(L.width - 40, textWidth(d.title, 22) + 40),
@@ -412,6 +514,16 @@ export default function HandDiagram({ diagram: d, animate = true, onNodeClick })
             <HandText lines={['tap a block to ask about it']} x={L.width - 12}
                       y={CAPTION_H / 2 - 4} px={15} color={PENCIL} seed={seed + 3}
                       anchor="end" weight={400} />
+          </g>
+        )}
+
+        {/* the figure itself: our geometry, traced as if drawn by hand */}
+        {L.figure && (
+          <g transform={`translate(${L.figX} ${L.figY + CAPTION_H})`}>
+            {drawn.outline.map((paths, i) => paths.map((p, j) => (
+              <Stroke key={`o${i}-${j}`} path={p} t={at.outline[i].t}
+                      d={at.outline[i].d} animate={playing} />
+            )))}
           </g>
         )}
 

@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import re
 
+from . import figures
+
 MAX_NODES = 24
 MAX_EDGES = 40
 MAX_LABEL = 48
@@ -154,6 +156,13 @@ def parse_edge_list(title: str, lines: list[str]) -> dict | None:
         return None
     node_list = [nodes[i] for i in order[:MAX_NODES]]
     kind = classify(node_list, unique)
+    fig = as_figure(title, node_list, unique, kind)
+    if fig:
+        # a real object we hold the drawing for: the names are the model's,
+        # every coordinate is ours
+        return {"title": _clean_label(title) or fig["title"], "kind": "figure",
+                "direction": "LR", "nodes": node_list, "edges": unique,
+                "figure": fig}
     if kind == "flowchart":
         for n in node_list:
             # Start / End terminals are drawn rounded, as flowcharts expect
@@ -167,6 +176,33 @@ def parse_edge_list(title: str, lines: list[str]) -> dict | None:
         "nodes": node_list,
         "edges": unique,
     }
+
+
+def as_figure(title: str, nodes: list[dict], edges: list[dict],
+              kind: str) -> dict | None:
+    """One whole and its named parts, where we hold the real drawing.
+
+    The model does not always write this as a star. Asked for a neuron it
+    wrote a little tree - Neuron -> Cell body -> Dendrites - which is the same
+    claim about the same object, so any shape that hangs off a single root
+    counts. A flowchart or a cycle does not: there the arrows are the content,
+    and replacing them with a picture of an organ would lose the answer.
+    """
+    if kind in ("flowchart", "cycle"):
+        return None
+    indeg = {n["id"]: 0 for n in nodes}
+    for e in edges:
+        indeg[e["to"]] = indeg.get(e["to"], 0) + 1
+    roots = [i for i, d in indeg.items() if d == 0]
+    if len(roots) != 1:
+        return None
+    hub = roots[0]
+    label = {n["id"]: n["label"] for n in nodes}
+    note = {e["to"]: e["label"] for e in edges}
+    parts = [{"label": label[n["id"]], "note": note.get(n["id"], "")}
+             for n in nodes if n["id"] != hub]
+    return (figures.match(label.get(hub, ""), parts)
+            or figures.match(title, parts))
 
 
 def classify(nodes: list[dict], edges: list[dict]) -> str:
@@ -209,6 +245,11 @@ def classify(nodes: list[dict], edges: list[dict]) -> str:
 
 def describe(d: dict) -> str:
     """Plain-text form, so follow-up prompts can see what was drawn."""
+    f = d.get("figure")
+    if f:
+        parts = "; ".join(p["label"] + (f" ({p['note']})" if p["note"] else "")
+                          for p in f["parts"])
+        return f"[Figure: {f['title']}, labelled: {parts}]"
     labels = {n["id"]: n["label"] for n in d["nodes"]}
     rel = "; ".join(
         f"{labels[e['from']]} -> {labels[e['to']]}" + (f" ({e['label']})" if e["label"] else "")

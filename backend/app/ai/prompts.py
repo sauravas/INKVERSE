@@ -1,3 +1,5 @@
+from . import figures
+
 EXTRACT_SYSTEM = (
     "You read photographs of a student's handwritten notebook page and transcribe "
     "the question they wrote. You never solve it."
@@ -207,6 +209,15 @@ direction: LR
     CPU -> Registers : fastest storage
     @@END
   Later steps then explain the parts in words, without drawing them again.
+- These objects we can draw properly, in that same form: {FIGURES}. Name the
+  object exactly, then one line per part with what it does. The drawing itself
+  is ours and already correct, so never say where a part sits or how to draw
+  it - only name it and say what it does:
+    @@DIAGRAM Structure of the heart
+    Heart -> Right atrium : receives blood from the vena cava
+    Heart -> Left ventricle : pumps blood into the aorta
+    Heart -> Septum : separates the two sides
+    @@END
 - Never draw a diagram that is a single arrow between two blocks; say it in words.
 
 Tables: for a comparison or a list of properties, use a table instead of prose:
@@ -219,6 +230,10 @@ Tables: for a comparison or a list of properties, use a table instead of prose:
 - Keep cells short; LaTeX is allowed inside cells.
 """
 
+# The figures we hold real geometry for, named in the rules above, so adding
+# one to the library cannot leave the prompt behind.
+_BLOCK_RULES = _BLOCK_RULES.replace("{FIGURES}", ", ".join(figures.names()))
+
 SOLVE_SYSTEM = (
     "You are an exam tutor for a student preparing for university examinations. "
     "You produce accurate, complete, step-by-step solutions that would earn full "
@@ -226,11 +241,16 @@ SOLVE_SYSTEM = (
     "and carry units through numerical work.\n\n" + _BLOCK_RULES
 )
 
+def figure_block(question: str) -> str:
+    hint = figures.prompt_hint(question)
+    return f"\n{hint}\n" if hint else ""
+
+
 SOLVE_USER = """Solve this examination question.
 
 {subject_line}{context_block}{session_block}Question:
 {question}
-
+{figure_block}
 Requirements:
 - If it is a numerical problem: list given data, state the formula, substitute, compute, state the answer with units.
 - If it is a theory question: structure it as an examination answer with named points and, where useful, a comparison.

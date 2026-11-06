@@ -515,6 +515,7 @@ class OllamaProvider:
              {"role": "user", "content": prompts.SOLVE_USER.format(
                  question=question, subject_line=sl,
                  context_block=prompts.context_block(context),
+                 figure_block=prompts.figure_block(question),
                  session_block=prompts.session_block(session or []))}],
             num_predict=1400, temp=0.3, think=False)
 
