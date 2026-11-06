@@ -126,6 +126,23 @@ html, body, #root {
 /* Inline maths takes exactly one line box (so a fraction never pushes the
    lines below it off the rules) and is nudged so its baseline matches the
    handwriting's; tall pieces simply overhang, as they would on paper.      */
+/* A display formula wider than the sheet used to carry straight on past the
+   right edge of the paper - the last term sat outside the page. KaTeX cannot
+   break a formula across lines without changing what it says, so the line
+   stays whole and the page keeps it: it is held to the width of the paper
+   and can be swiped if it is genuinely longer. Inline maths is untouched. */
+.ink-math.block {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.ink-math.block::-webkit-scrollbar { height: 7px; }
+.ink-math.block::-webkit-scrollbar-thumb {
+  background: #d8d2c4; border-radius: 7px; border: 2px solid transparent;
+  background-clip: content-box;
+}
+.ink-math.block::-webkit-scrollbar-track { background: transparent; }
+
 /* A formula KaTeX could not parse, written out in words instead. It is part of
    the answer, not an error, so it is styled like the text around it. */
 .ink-math-plain {

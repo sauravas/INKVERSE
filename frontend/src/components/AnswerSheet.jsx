@@ -200,11 +200,56 @@ function MathSpan({ value, display }) {
     // readable, and styled as part of the answer rather than as an error
     return <span className="ink-math-plain" title={value}>{render.words}</span>
   }
+  if (display) return <FitMath html={render.html} value={value} />
   return (
     <span
       data-tex={value}
-      className={`ink-math ${display ? 'block text-center' : 'ink-math--tilt'}`}
+      className="ink-math ink-math--tilt"
       dangerouslySetInnerHTML={{ __html: render.html }}
+    />
+  )
+}
+
+/**
+ * A display formula that is wider than the page writes itself smaller, the
+ * way you do to stay inside the margin, instead of carrying on past the edge
+ * of the paper.
+ *
+ * Shrinking by font-size rather than a transform keeps the line box honest:
+ * the formula's height comes down with its width, so the ruled lines below it
+ * do not end up with a gap where the full-size formula used to be. Below 0.6
+ * it would stop being readable, so the last of it is left to the scroll the
+ * stylesheet already allows.
+ */
+function FitMath({ html, value }) {
+  const ref = useRef(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return undefined
+    const fit = () => {
+      el.style.fontSize = ''                  // measure at its natural size
+      const avail = el.clientWidth
+      const need = el.scrollWidth
+      if (avail > 0 && need > avail + 1) {
+        el.style.fontSize = `${Math.max(0.6, avail / need).toFixed(3)}em`
+      }
+    }
+    fit()
+    // the page changes width with the page-size selector and on the phone;
+    // watch the parent, since watching the element would see its own resize
+    const box = el.parentElement
+    if (!box) return undefined
+    const ro = new ResizeObserver(fit)
+    ro.observe(box)
+    return () => ro.disconnect()
+  }, [html])
+
+  return (
+    <span
+      ref={ref}
+      data-tex={value}
+      className="ink-math block text-center"
+      dangerouslySetInnerHTML={{ __html: html }}
     />
   )
 }
