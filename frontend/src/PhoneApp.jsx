@@ -96,12 +96,21 @@ export default function PhoneApp() {
   const onInkChange = useCallback((n) => setInk(n), [])
 
   useEffect(() => {
-    // keep the browser chrome from bouncing while writing
-    const stop = (e) => e.preventDefault()
-    document.addEventListener('gesturestart', stop)
+    // Keep the browser chrome from bouncing while writing - but only while
+    // writing. Cancelling every touchmove on the document stopped the page
+    // scrolling at all, so once an answer was longer than the screen there
+    // was no way to reach the end of it. The pad still swallows the gesture
+    // (it is .ink-surface, which is touch-action: none), and the rubber-band
+    // on the rest of the page is already handled by overscroll-behavior.
+    const stop = (e) => {
+      const t = e.target
+      if (t instanceof Element && t.closest('.ink-surface')) e.preventDefault()
+    }
+    const noZoom = (e) => e.preventDefault()
+    document.addEventListener('gesturestart', noZoom)
     document.addEventListener('touchmove', stop, { passive: false })
     return () => {
-      document.removeEventListener('gesturestart', stop)
+      document.removeEventListener('gesturestart', noZoom)
       document.removeEventListener('touchmove', stop)
     }
   }, [])
