@@ -92,6 +92,10 @@ if (Get-Command ollama -ErrorAction SilentlyContinue) {
       Start-Sleep -Seconds 1
     }
     Write-Host 'Starting Ollama...' -ForegroundColor Cyan
+    # The only backend setting that moved the needle: it helps most on
+    # long answers, where the cost per token grows with what is already
+    # written. Only applies when we are the ones starting Ollama.
+    $env:OLLAMA_FLASH_ATTENTION = '1'
     Start-Process ollama -ArgumentList 'serve' -WindowStyle Hidden
     for ($i = 0; $i -lt 20 -and -not (Test-Ollama); $i++) { Start-Sleep -Milliseconds 500 }
     if (-not (Test-Ollama)) {

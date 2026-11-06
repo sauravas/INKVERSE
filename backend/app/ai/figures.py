@@ -542,10 +542,18 @@ def prompt_hint(text: str) -> str:
                 break
     if not fig:
         return ""
+    # This lands at the end of the prompt, which is where a 14B model looks
+    # hardest - so it also carries the rule it was most likely to break. Given
+    # the bare list it labelled all twenty-two parts and then wrote every one
+    # of them out again as a bullet list underneath, doubling the answer and
+    # the wait for an answer that said nothing twice.
     return (f"We can draw the {fig['names'][0]} properly, so draw it rather "
-            f"than describing it. Label it using these names exactly, "
-            f"choosing the ones the question needs: "
-            + ", ".join(fig["parts"]) + ".")
+            f"than describing it, labelling the parts the question asks "
+            f"about. Spell them exactly as here, and use no other names: "
+            + ", ".join(fig["parts"]) + ".\n"
+            f"Each label already explains its own part. After the diagram do "
+            f"NOT list the parts again in words and do not write bullets: add "
+            f"at most two short steps on how they work together.")
 
 
 def names() -> list[str]:
