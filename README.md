@@ -1,5 +1,7 @@
 # INKWISE
 
+![INKWISE - just write it down](docs/cover.png)
+
 A local-first handwriting study workspace. Write a question with a stylus, finger
 or phone S Pen; the app reads it, solves it, and writes the solution back out by
 hand on notebook paper. Progress is tracked deterministically, so "EXAM READY"
