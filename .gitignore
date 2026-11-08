@@ -24,3 +24,4 @@ bench/shot-*.png
 *.pptx
 # whisperflow sidecar environment (PyTorch etc.; recreated by start.ps1)
 speech/.venv/
+bench/pic-*.png

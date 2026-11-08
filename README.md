@@ -10,6 +10,72 @@ and never receives anything without an explicit confirmation.
 
 ---
 
+## Get it running — one command
+
+With [Ollama](https://ollama.com), [Python 3.11+](https://python.org) and
+[Node 18+](https://nodejs.org) installed, paste this into PowerShell:
+
+```powershell
+git clone https://github.com/sauravas/INKVERSE.git; cd INKVERSE; ollama pull gemma3:4b; ollama pull qwen2.5:14b; .\start.ps1
+```
+
+Then open <http://localhost:8000>.
+
+That one line clones the repo, downloads the two models, creates the Python
+virtual environment, installs the backend and frontend dependencies, builds the
+frontend, starts Ollama if it is not already up, frees the port if something
+else is squatting on it, and serves the app, the API and the pairing socket
+together on **:8000**.
+
+**First run takes a while** — about **13 GB** of models to download, plus the
+dependency install. After that `.\start.ps1` is a few seconds.
+
+| You need | Why |
+|---|---|
+| Windows + PowerShell | `start.ps1` is the launcher; the app itself is cross-platform |
+| ~16 GB RAM (32 GB comfortable) | the two models hold ~13 GB resident while answering |
+| Ollama | runs the local models |
+| Python 3.11+, Node 18+ | backend and frontend build |
+
+No API key is needed. Nothing is uploaded. The optional cloud provider is off
+unless you turn it on and confirm it.
+
+### Step by step, if you prefer
+
+```powershell
+git clone https://github.com/sauravas/INKVERSE.git
+cd INKVERSE
+ollama pull gemma3:4b       # 3.3 GB - reads your handwriting
+ollama pull qwen2.5:14b     # 9.0 GB - solves the question
+.\start.ps1                 # builds everything, then serves on :8000
+```
+
+For the phone: click **Connect phone** in the top bar and scan the QR with a
+phone on the same Wi-Fi. It opens the same workspace — write on either device,
+the answer appears on both.
+
+---
+
+## What it looks like
+
+Write the question by hand, and it is read back to you before anything is
+solved — the model never acts on a reading you have not confirmed:
+
+![Reading your handwriting back for confirmation](docs/verify.png)
+
+Diagrams are drawn from a geometry library that ships with the app. The model
+chooses *which* parts to label and what each one does; every coordinate is the
+app's, so the anatomy cannot be hallucinated:
+
+![A labelled diagram of the human heart](docs/diagram.png)
+
+Every run is traceable. The agent panels show what ran, in what order, how long
+it took and what it decided — including the stages that were skipped and why:
+
+![The agent workflow and traced run](docs/agents.png)
+
+---
+
 ## Quick start
 
 ```powershell
@@ -53,9 +119,6 @@ Windowed is steady. Confirmed on the development machine (Intel Arc
 stops it. `-Open` launches it that way for you. Updating the graphics
 driver is the real fix; running the models on the CPU
 (`INKWISE_CPU_ONLY=1`) also avoids the contention.
-
-```powershell
-```
 
 ---
 
